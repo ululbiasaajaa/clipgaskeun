@@ -17,3 +17,6 @@ python clipgaskeun.py video.mp4 --cut 1:05-1:40 --cut 5:10-5:30 --logo logo.png 
 - Pertama kali jalan, model whisper diunduh otomatis.
 
 Hanya untuk file lokal. Pastikan kamu punya hak memakai konten yang diklip.
+
+## Lisensi
+MIT, lihat file LICENSE.
