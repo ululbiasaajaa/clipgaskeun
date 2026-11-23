@@ -4,9 +4,10 @@
 Contoh:
   python clipgaskeun.py stream.mp4 --cut 4:09:41-4:10:17
   python clipgaskeun.py stream.mp4 --cut 1:00-1:20 --cut 5:10-5:30 --logo logo.png -o hasil.mp4
-Butuh: ffmpeg + `pip install faster-whisper` (untuk subtitle).
+  python clipgaskeun.py "https://www.youtube.com/watch?v=ID" --cut 4:09:41-4:10:17   (waktu = waktu di video YouTube)
+Butuh: ffmpeg + `pip install faster-whisper` (subtitle) + yt-dlp (hanya untuk link YouTube).
 """
-import argparse, json, os, re, shutil, subprocess, sys, tempfile
+import argparse, json, math, os, re, shutil, subprocess, sys, tempfile
 
 
 def ts(s):
@@ -16,6 +17,45 @@ def ts(s):
     for p in parts:
         sec = sec * 60 + p
     return sec
+
+
+PAD = 3  # detik cadangan di awal & akhir bagian yang diunduh dari link
+
+
+def is_url(s):
+    return re.match(r"^https?://", s, re.I) is not None
+
+
+def hms(sec):
+    sec = int(sec)
+    return f"{sec // 3600}:{sec // 60 % 60:02}:{sec % 60:02}"
+
+
+def find_ytdlp():
+    exe = shutil.which("yt-dlp")
+    if exe:
+        return [exe]
+    try:
+        import yt_dlp  # noqa: F401
+        return [sys.executable, "-m", "yt_dlp"]
+    except ImportError:
+        return None
+
+
+def download_section(ytdlp, url, start, end, prefix):
+    """Unduh hanya detik [start, end] (plus cadangan PAD) dari link.
+    Mengembalikan (path file, detik video tempat file itu dimulai)."""
+    ds = max(0, int(start) - PAD)
+    de = int(math.ceil(end)) + PAD
+    cmd = ytdlp + ["--no-playlist", "--download-sections", f"*{hms(ds)}-{hms(de)}",
+                   "--force-keyframes-at-cuts", "-f", "bv*[height<=1080]+ba/b",
+                   "--merge-output-format", "mp4", "-o", prefix + ".%(ext)s", url]
+    if subprocess.run(cmd).returncode:
+        sys.exit("yt-dlp gagal mengunduh (pesan di atas). Coba perbarui: pip install -U yt-dlp  (atau: winget upgrade yt-dlp)")
+    f = prefix + ".mp4"
+    if not os.path.isfile(f):
+        sys.exit("File hasil unduhan tidak ditemukan.")
+    return f, ds
 
 
 def run(cmd, cwd=None):
@@ -76,10 +116,10 @@ def transcribe(media, lang, model):
 
 def main():
     ap = argparse.ArgumentParser(description="Potong video jadi Shorts 9:16 + subtitle.")
-    ap.add_argument("input")
+    ap.add_argument("input", help="file video lokal ATAU link YouTube (http...)")
     ap.add_argument("--cut", action="append", required=True, metavar="MULAI-SELESAI",
-                    help="rentang waktu, boleh diulang untuk digabung (mis. 1:05-1:40)")
-    ap.add_argument("-o", "--out", help="file hasil (default: <nama>_short.mp4)")
+                    help="rentang waktu, boleh diulang untuk digabung (mis. 1:05-1:40). Untuk link = waktu di video YouTube")
+    ap.add_argument("-o", "--out", help="file hasil (default: <nama>_short.mp4; untuk link: clipgaskeun_short.mp4)")
     ap.add_argument("--lang", default="en", help="bahasa ucapan (default en)")
     ap.add_argument("--model", default="small.en", help="model whisper (default small.en; pakai small/medium untuk non-Inggris)")
     ap.add_argument("--no-subs", action="store_true", help="tanpa subtitle")
@@ -93,26 +133,53 @@ def main():
 
     if not shutil.which("ffmpeg"):
         sys.exit("ffmpeg tidak ditemukan di PATH.")
-    if not os.path.isfile(a.input):
+    url_mode = is_url(a.input)
+    if not url_mode and not os.path.isfile(a.input):
         sys.exit(f"File tidak ada: {a.input}")
+    ytdlp = None
+    if url_mode:
+        ytdlp = find_ytdlp()
+        if not ytdlp:
+            sys.exit("yt-dlp belum terpasang (dibutuhkan untuk link). Pasang: winget install yt-dlp  atau  pip install yt-dlp")
     cuts = []
     for c in a.cut:
         m = re.fullmatch(r"\s*([\d:.]+)\s*-\s*([\d:.]+)\s*", c)
         if not m or ts(m[2]) <= ts(m[1]):
             sys.exit(f"Rentang tidak valid: {c!r} (contoh: 1:05-1:40)")
         cuts.append((ts(m[1]), ts(m[2])))
-    out = a.out or os.path.splitext(a.input)[0] + "_short.mp4"
+    out = a.out or ("clipgaskeun_short.mp4" if url_mode else os.path.splitext(a.input)[0] + "_short.mp4")
     tmp = tempfile.mkdtemp(prefix="clipgaskeun_")
     try:
+        # 0) siapkan sumber tiap bagian: file lokal, atau unduh hanya bagian itu dari link
+        n = len(cuts)
+        segs = []  # (file, mulai, selesai) -- waktu relatif terhadap file itu
+        if url_mode:
+            for i, (cs, ce) in enumerate(cuts):
+                print(f"[0/3] mengunduh bagian {i+1}/{n} dari link (hanya bagian itu) ...")
+                f, ds = download_section(ytdlp, a.input, cs, ce, os.path.join(tmp, f"dl{i}"))
+                segs.append((f, cs - ds, ce - ds))
+        else:
+            segs = [(a.input, cs, ce) for cs, ce in cuts]
+
         # 1) potong (dan gabung) -> klip mentah 16:9. Presisi frame karena re-encode.
         raw = os.path.join(tmp, "raw.mp4")
-        fc, n = "", len(cuts)
-        for i, (s, e) in enumerate(cuts):
-            fc += f"[0:v]trim={s}:{e},setpts=PTS-STARTPTS,fps=30[v{i}];"
-            fc += f"[0:a]atrim={s}:{e},asetpts=PTS-STARTPTS,afade=t=in:d=0.06,afade=t=out:st={e-s-0.06:.3f}:d=0.06[a{i}];"
+        files = []
+        for f, _, _ in segs:
+            if f not in files:
+                files.append(f)
+        inputs = []
+        for f in files:
+            inputs += ["-i", f]
+        fc = ""
+        for i, (f, cs, ce) in enumerate(segs):
+            k = files.index(f)
+            # setpts di depan: timestamp file hasil unduhan tidak selalu mulai dari 0
+            fc += f"[{k}:v]setpts=PTS-STARTPTS,trim={cs}:{ce},setpts=PTS-STARTPTS,fps=30[v{i}];"
+            fc += (f"[{k}:a]asetpts=PTS-STARTPTS,atrim={cs}:{ce},asetpts=PTS-STARTPTS,"
+                   f"afade=t=in:d=0.06,afade=t=out:st={ce-cs-0.06:.3f}:d=0.06[a{i}];")
         fc += "".join(f"[v{i}][a{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=1[v][a]"
         print(f"[1/3] memotong {n} bagian ...")
-        run(["ffmpeg", "-y", "-v", "error", "-i", a.input, "-filter_complex", fc, "-map", "[v]", "-map", "[a]",
+        run(["ffmpeg", "-y", "-v", "error"] + inputs + ["-filter_complex", fc, "-map", "[v]", "-map", "[a]",
              "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "aac", "-b:a", "192k", raw])
 
         # 2) subtitle: ditranskripsi dari potongan itu sendiri -> waktu selalu pas
