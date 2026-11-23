@@ -22,6 +22,17 @@ def ts(s):
 PAD = 3  # detik cadangan di awal & akhir bagian yang diunduh dari link
 
 
+def unique_path(path):
+    """Kalau file sudah ada, pakai nama_2, nama_3, ... supaya hasil sebelumnya tidak tertimpa."""
+    if not os.path.exists(path):
+        return path
+    base, ext = os.path.splitext(path)
+    i = 2
+    while os.path.exists(f"{base}_{i}{ext}"):
+        i += 1
+    return f"{base}_{i}{ext}"
+
+
 def is_url(s):
     return re.match(r"^https?://", s, re.I) is not None
 
@@ -119,7 +130,7 @@ def main():
     ap.add_argument("input", help="file video lokal ATAU link YouTube (http...)")
     ap.add_argument("--cut", action="append", required=True, metavar="MULAI-SELESAI",
                     help="rentang waktu, boleh diulang untuk digabung (mis. 1:05-1:40). Untuk link = waktu di video YouTube")
-    ap.add_argument("-o", "--out", help="file hasil (default: <nama>_short.mp4; untuk link: clipgaskeun_short.mp4)")
+    ap.add_argument("-o", "--out", help="file hasil. Default: <nama>_short.mp4 di sebelah video asli (untuk link: clipgaskeun_short.mp4 di folder tempatmu menjalankan). Kalau sudah ada, otomatis diberi nomor _2, _3, ...")
     ap.add_argument("--lang", default="en", help="bahasa ucapan (default en)")
     ap.add_argument("--model", default="small.en", help="model whisper (default small.en; pakai small/medium untuk non-Inggris)")
     ap.add_argument("--no-subs", action="store_true", help="tanpa subtitle")
@@ -148,6 +159,8 @@ def main():
             sys.exit(f"Rentang tidak valid: {c!r} (contoh: 1:05-1:40)")
         cuts.append((ts(m[1]), ts(m[2])))
     out = a.out or ("clipgaskeun_short.mp4" if url_mode else os.path.splitext(a.input)[0] + "_short.mp4")
+    if not a.out:  # nama otomatis -> jangan menimpa hasil sebelumnya (kalau -o diberikan, itu pilihanmu)
+        out = unique_path(out)
     tmp = tempfile.mkdtemp(prefix="clipgaskeun_")
     try:
         # 0) siapkan sumber tiap bagian: file lokal, atau unduh hanya bagian itu dari link

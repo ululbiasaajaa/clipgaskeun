@@ -30,6 +30,8 @@ pip install faster-whisper
 ```
 (Di macOS/Linux, kalau `pip` tidak dikenali, pakai `pip3`.)
 
+Mau sekalian memasang faster-whisper **dan** yt-dlp? Cukup `pip install -r requirements.txt`.
+
 ### 4. Pasang yt-dlp (opsional, untuk link YouTube)
 - **Windows:** `winget install yt-dlp`
 - **macOS:** `brew install yt-dlp`
@@ -41,6 +43,8 @@ Siap dipakai.
 
 ## Pakai
 
+**Format waktu di `--cut`:** detik (`90`), menit:detik (`1:30`), atau jam:menit:detik (`4:09:41`). Pecahan detik boleh (`1:30.5`). Pisahkan awal dan akhir dengan tanda minus: `1:05-1:40`.
+
 ### Dari file di komputer
 Potong satu bagian:
 ```
@@ -50,7 +54,7 @@ Gabung beberapa bagian, pakai logo, tentukan nama hasil:
 ```
 python clipgaskeun.py video.mp4 --cut 1:05-1:40 --cut 5:10-5:30 --logo clipgaskeun-watermark.png -o hasil.mp4
 ```
-Hasilnya disimpan di sebelah video asli dengan nama `<nama>_short.mp4`, kecuali kamu tentukan lewat `-o`.
+Hasilnya disimpan **di folder yang sama dengan video asli**, bernama `<nama>_short.mp4`.
 
 ### Dari link YouTube
 ```
@@ -59,8 +63,13 @@ python clipgaskeun.py "https://www.youtube.com/watch?v=ID_VIDEO" --cut 4:09:41-4
 - **Waktu di `--cut` adalah waktu di video YouTube-nya**, jadi tidak perlu menghitung apa-apa.
 - Yang diunduh hanya bagian yang kamu minta (ditambah 3 detik cadangan di awal dan akhir), bukan seluruh video.
 - **Selalu beri tanda kutip pada link** (`"..."`), terutama di PowerShell, karena karakter `&` dan `?` di link bisa memecah perintah.
-- Hasilnya disimpan di folder tempatmu menjalankan perintah dengan nama `clipgaskeun_short.mp4`, kecuali kamu tentukan lewat `-o`.
+- Hasilnya disimpan **di folder tempatmu menjalankan perintah**, bernama `clipgaskeun_short.mp4`.
 - Boleh menggabung beberapa bagian dari satu link dengan `--cut` berulang.
+
+### Di mana hasilnya, dan apakah tertimpa?
+- Nama dan lokasi sudah dijelaskan di atas. Mau lokasi atau nama lain: pakai `-o`, misalnya `-o D:\\Shorts\\klip1.mp4`.
+- Kalau nama otomatis sudah dipakai, hasil baru diberi nomor (`_short_2.mp4`, `_short_3.mp4`, ...), jadi **klip sebelumnya tidak tertimpa**. Kalau kamu memakai `-o` dengan nama yang sudah ada, file itu akan ditimpa.
+- Video dan subtitle (`.mp4`, `.srt`) sudah masuk `.gitignore`, jadi tidak ikut ter-commit ke GitHub.
 
 **Catatan pertama kali:** model Whisper diunduh otomatis (sekitar 500 MB), jadi langkah subtitle pertama akan lebih lama. Sesudahnya tidak perlu unduh lagi.
 
@@ -68,7 +77,7 @@ python clipgaskeun.py "https://www.youtube.com/watch?v=ID_VIDEO" --cut 4:09:41-4
 | Opsi | Fungsi |
 |---|---|
 | `--cut MULAI-SELESAI` | Rentang waktu (`1:05-1:40`). Boleh diulang, bagian-bagiannya digabung berurutan. |
-| `-o, --out` | Nama file hasil. |
+| `-o, --out` | Nama dan lokasi file hasil. |
 | `--lang` | Bahasa ucapan. Default `en`; untuk Indonesia pakai `id`. |
 | `--model` | Model Whisper. Default `small.en` (khusus Inggris). Untuk bahasa lain pakai `small` atau `medium`. |
 | `--no-subs` | Tanpa subtitle. |

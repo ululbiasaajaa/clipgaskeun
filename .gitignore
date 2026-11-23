@@ -1,0 +1,10 @@
+# Hasil dan video mentah jangan ikut ke GitHub
+*.mp4
+*.mkv
+*.webm
+*.mov
+*.srt
+!clipgaskeun-watermark.png
+__pycache__/
+*.pyc
+clipgaskeun_*/
