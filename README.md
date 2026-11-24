@@ -2,6 +2,10 @@
 
 Potong video panjang (stream, podcast, dll) jadi Shorts 9:16 dengan latar blur, subtitle otomatis, dan watermark opsional. Bisa dari file di komputermu **atau langsung dari link YouTube**. Jalan lokal, gratis, tanpa API berbayar.
 
+![Sebelum 16:9, sesudah 9:16 dengan latar blur, subtitle otomatis, dan watermark](docs/demo.gif)
+
+*Contoh di atas: rekaman layar berbahasa Indonesia, diproses dengan satu perintah. Bahasa dideteksi otomatis.*
+
 ## Yang dibutuhkan
 - **Python 3.9+** ([python.org](https://www.python.org/downloads/), centang "Add Python to PATH" saat instal di Windows)
 - **ffmpeg**
@@ -43,7 +47,9 @@ Siap dipakai.
 
 ## Pakai
 
-**Format waktu di `--cut`:** detik (`90`), menit:detik (`1:30`), atau jam:menit:detik (`4:09:41`). Pecahan detik boleh (`1:30.5`). Pisahkan awal dan akhir dengan tanda minus: `1:05-1:40`.
+**Format waktu di `--cut`:** detik (`90`), menit:detik (`1:30`), atau jam:menit:detik (`4:09:41`). Pecahan detik boleh (`1:30.5`). Pisahkan awal dan akhir dengan tanda minus: `1:05-1:40`. Menit dan detik setelah titik dua harus 00–59, dan tiap bagian minimal 0,5 detik.
+
+> **Bahasa video dideteksi otomatis** (Indonesia, Inggris, dan lainnya). Kalau terdeteksi salah, ClipGaskeun memberi tahu di terminal; ulangi dengan `--lang id` (Indonesia) atau `--lang en` (Inggris).
 
 ### Dari file di komputer
 Potong satu bagian:
@@ -78,18 +84,20 @@ python clipgaskeun.py "https://www.youtube.com/watch?v=ID_VIDEO" --cut 4:09:41-4
 |---|---|
 | `--cut MULAI-SELESAI` | Rentang waktu (`1:05-1:40`). Boleh diulang, bagian-bagiannya digabung berurutan. |
 | `-o, --out` | Nama dan lokasi file hasil. |
-| `--lang` | Bahasa ucapan. Default `en`; untuk Indonesia pakai `id`. |
-| `--model` | Model Whisper. Default `small.en` (khusus Inggris). Untuk bahasa lain pakai `small` atau `medium`. |
+| `--lang` | Bahasa ucapan, mis. `id` atau `en`. Default: dideteksi otomatis. |
+| `--model` | Model Whisper. Default `small` (semua bahasa). `medium` lebih akurat tapi lebih lambat; `small.en` sedikit lebih cepat untuk video berbahasa Inggris. |
 | `--no-subs` | Tanpa subtitle. |
 | `--srt file.srt` | Pakai subtitle buatan sendiri (waktunya relatif ke awal hasil). |
 | `--logo file.png` | Watermark PNG di pojok kiri atas. |
-| `--logo-scale` | Ukuran logo (default `0.62`). |
-| `--font`, `--font-size` | Font dan ukuran subtitle (default Poppins, 10). Kalau font tidak terpasang, ffmpeg memakai font bawaan. |
+| `--logo-scale` | Ukuran logo, `0.05`–`3` (default `0.62`). |
+| `--font`, `--font-size` | Font dan ukuran subtitle (default Poppins, 10; ukuran `4`–`40`). Kalau font tidak terpasang, ffmpeg memakai font bawaan. |
 
-Contoh video berbahasa Indonesia:
+Contoh video berbahasa Indonesia, bahasanya dikunci supaya tidak salah deteksi:
 ```
-python clipgaskeun.py "https://www.youtube.com/watch?v=ID_VIDEO" --cut 12:00-12:45 --lang id --model small
+python clipgaskeun.py "https://www.youtube.com/watch?v=ID_VIDEO" --cut 12:00-12:45 --lang id
 ```
+
+Folder di `-o` yang belum ada dibuat otomatis. Video tanpa suara tetap bisa diproses (hasilnya hening, tanpa subtitle otomatis).
 
 ## Kalau ada masalah
 - **`ffmpeg tidak ditemukan`**: ffmpeg belum terpasang atau belum ada di PATH. Ulangi langkah 1 dan buka terminal baru.
@@ -97,6 +105,9 @@ python clipgaskeun.py "https://www.youtube.com/watch?v=ID_VIDEO" --cut 12:00-12:
 - **`yt-dlp belum terpasang`**: jalankan langkah 4.
 - **`yt-dlp gagal mengunduh`**: YouTube sering mengubah sistemnya, jadi perbarui yt-dlp dengan `pip install -U yt-dlp` atau `winget upgrade yt-dlp`, lalu coba lagi.
 - **`0 kata`**: tidak ada ucapan di bagian itu, jadi video dirender tanpa subtitle.
+- **`Format waktu salah`**: cek penulisan `--cut`, misalnya `1:05-1:40` (bukan `1::05` atau `1:75`).
+- **`melewati akhir video`**: waktu selesai lebih panjang dari videonya. Cek panjang video lalu ganti angkanya.
+- **Bahasa terdeteksi salah / subtitle jadi terjemahan**: tambahkan `--lang id` (atau bahasa yang benar).
 - **Subtitle salah-salah kata**: coba model lebih besar, misalnya `--model medium`.
 
 ## Penting

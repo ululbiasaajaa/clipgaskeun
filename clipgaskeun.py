@@ -5,18 +5,60 @@ Contoh:
   python clipgaskeun.py stream.mp4 --cut 4:09:41-4:10:17
   python clipgaskeun.py stream.mp4 --cut 1:00-1:20 --cut 5:10-5:30 --logo logo.png -o hasil.mp4
   python clipgaskeun.py "https://www.youtube.com/watch?v=ID" --cut 4:09:41-4:10:17   (waktu = waktu di video YouTube)
+Bahasa ucapan dideteksi otomatis (kunci dengan --lang id bila perlu).
 Butuh: ffmpeg + `pip install faster-whisper` (subtitle) + yt-dlp (hanya untuk link YouTube).
 """
 import argparse, json, math, os, re, shutil, subprocess, sys, tempfile
 
 
 def ts(s):
-    """'1:02:03' | '2:03' | '123.5' -> detik."""
-    parts = [float(p) for p in s.split(":")]
+    """'1:02:03' | '2:03' | '123.5' -> detik. Format salah -> None.
+    Menit/detik setelah titik dua harus 00-59 (jadi '1:99' ditolak); menit di format m:ss boleh > 59 ('75:00')."""
+    m = re.fullmatch(r"(?:(\d+):)?(?:(\d+):)?(\d+(?:\.\d+)?)", s.strip())
+    if not m:
+        return None
+    a, b, c = m.groups()
+    nums = [int(x) for x in (a, b) if x is not None] + [float(c)]
+    if len(nums) >= 2 and nums[-1] >= 60:
+        return None
+    if len(nums) == 3 and nums[1] >= 60:
+        return None
     sec = 0.0
-    for p in parts:
+    for p in nums:
         sec = sec * 60 + p
     return sec
+
+
+def probe(path):
+    """(durasi detik atau None, punya audio?) lewat ffprobe. Tanpa ffprobe: (None, True)."""
+    if not shutil.which("ffprobe"):
+        return None, True
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type",
+                        "-of", "json", path], capture_output=True, text=True)
+    try:
+        info = json.loads(r.stdout or "{}")
+    except ValueError:
+        return None, True
+    dur = info.get("format", {}).get("duration")
+    has_audio = any(st.get("codec_type") == "audio" for st in info.get("streams", []))
+    return (float(dur) if dur else None), has_audio
+
+
+def ranged(kind, lo, hi):
+    """Tipe argparse: angka dalam batas [lo, hi]."""
+    def f(v):
+        try:
+            x = kind(v)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"bukan angka: {v!r}")
+        if not lo <= x <= hi:
+            raise argparse.ArgumentTypeError(f"harus antara {lo} dan {hi} (kamu isi {v})")
+        return x
+    return f
+
+
+MIN_CUT = 0.5      # detik; bagian lebih pendek dari ini ditolak
+LONG_WARN = 20 * 60  # detik; di atas ini beri peringatan transkripsi berat
 
 
 PAD = 3  # detik cadangan di awal & akhir bagian yang diunduh dari link
@@ -113,9 +155,11 @@ def transcribe(media, lang, model):
         sys.exit("Gagal membaca audio:\n" + pcm.stderr.decode(errors="ignore")[-800:])
     audio = np.frombuffer(pcm.stdout, dtype=np.float32)
     m = WhisperModel(model, device="cpu", compute_type="int8")
-    segs, _ = m.transcribe(audio, language=lang, word_timestamps=True, vad_filter=True,
+    segs, info = m.transcribe(audio, language=lang, word_timestamps=True, vad_filter=True,
                            vad_parameters=dict(min_silence_duration_ms=300, speech_pad_ms=120),
                            condition_on_previous_text=False, beam_size=5)
+    if not lang:
+        print(f"      bahasa terdeteksi: {info.language} ({info.language_probability:.0%}). Salah? ulangi dengan --lang id / --lang en")
     words = []
     for s in segs:
         for w in s.words:
@@ -131,14 +175,14 @@ def main():
     ap.add_argument("--cut", action="append", required=True, metavar="MULAI-SELESAI",
                     help="rentang waktu, boleh diulang untuk digabung (mis. 1:05-1:40). Untuk link = waktu di video YouTube")
     ap.add_argument("-o", "--out", help="file hasil. Default: <nama>_short.mp4 di sebelah video asli (untuk link: clipgaskeun_short.mp4 di folder tempatmu menjalankan). Kalau sudah ada, otomatis diberi nomor _2, _3, ...")
-    ap.add_argument("--lang", default="en", help="bahasa ucapan (default en)")
-    ap.add_argument("--model", default="small.en", help="model whisper (default small.en; pakai small/medium untuk non-Inggris)")
+    ap.add_argument("--lang", default=None, help="bahasa ucapan, mis. id / en (default: dideteksi otomatis)")
+    ap.add_argument("--model", default="small", help="model whisper (default small, semua bahasa; medium = lebih akurat tapi lambat; small.en = khusus Inggris)")
     ap.add_argument("--no-subs", action="store_true", help="tanpa subtitle")
     ap.add_argument("--srt", help="pakai SRT sendiri (waktu relatif awal hasil) alih-alih transkripsi")
     ap.add_argument("--font", default="Poppins", help="nama font subtitle")
-    ap.add_argument("--font-size", type=int, default=10)
+    ap.add_argument("--font-size", type=ranged(int, 4, 40), default=10, help="ukuran subtitle 4-40 (default 10)")
     ap.add_argument("--logo", help="PNG watermark (pojok kiri atas)")
-    ap.add_argument("--logo-scale", type=float, default=0.62)
+    ap.add_argument("--logo-scale", type=ranged(float, 0.05, 3.0), default=0.62, help="ukuran logo 0.05-3 (default 0.62)")
     ap.add_argument("--keep-tmp", action="store_true")
     a = ap.parse_args()
 
@@ -152,15 +196,39 @@ def main():
         ytdlp = find_ytdlp()
         if not ytdlp:
             sys.exit("yt-dlp belum terpasang (dibutuhkan untuk link). Pasang: winget install yt-dlp  atau  pip install yt-dlp")
+    if a.logo and not os.path.isfile(a.logo):
+        sys.exit(f"File logo tidak ada: {a.logo}")
+    if a.srt and not os.path.isfile(a.srt):
+        sys.exit(f"File SRT tidak ada: {a.srt}")
+    if re.search(r"[',:;\\\[\]=]", a.font):
+        sys.exit(f"Nama font tidak boleh berisi karakter ' , : ; \\ [ ] = (kamu isi {a.font!r})")
     cuts = []
     for c in a.cut:
         m = re.fullmatch(r"\s*([\d:.]+)\s*-\s*([\d:.]+)\s*", c)
-        if not m or ts(m[2]) <= ts(m[1]):
-            sys.exit(f"Rentang tidak valid: {c!r} (contoh: 1:05-1:40)")
-        cuts.append((ts(m[1]), ts(m[2])))
+        cs, ce = (ts(m[1]), ts(m[2])) if m else (None, None)
+        if cs is None or ce is None:
+            sys.exit(f"Format waktu salah: {c!r}. Contoh: 1:05-1:40 atau 1:02:03-1:02:40 (menit & detik 00-59)")
+        if ce <= cs:
+            sys.exit(f"Waktu selesai harus sesudah waktu mulai: {c!r}")
+        if ce - cs < MIN_CUT:
+            sys.exit(f"Bagian terlalu pendek: {c!r} (minimal {MIN_CUT} detik)")
+        cuts.append((cs, ce))
+    if not url_mode:
+        dur, _ = probe(a.input)
+        if dur is not None:
+            for (cs, ce), c in zip(cuts, a.cut):
+                if cs >= dur:
+                    sys.exit(f"Rentang {c!r} dimulai setelah video habis (panjang video {hms(dur)}).")
+                if ce > dur + 0.5:
+                    sys.exit(f"Rentang {c!r} melewati akhir video (panjang video {hms(dur)}). Ganti waktu selesainya.")
+    total = sum(ce - cs for cs, ce in cuts)
+    if total > LONG_WARN and not a.no_subs and not a.srt:
+        print(f"Catatan: total potongan {hms(total)}. Transkripsi akan lama dan makan RAM; pertimbangkan potongan lebih pendek.")
     out = a.out or ("clipgaskeun_short.mp4" if url_mode else os.path.splitext(a.input)[0] + "_short.mp4")
     if not a.out:  # nama otomatis -> jangan menimpa hasil sebelumnya (kalau -o diberikan, itu pilihanmu)
         out = unique_path(out)
+    out_dir = os.path.dirname(os.path.abspath(out))
+    os.makedirs(out_dir, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix="clipgaskeun_")
     try:
         # 0) siapkan sumber tiap bagian: file lokal, atau unduh hanya bagian itu dari link
@@ -173,6 +241,18 @@ def main():
                 segs.append((f, cs - ds, ce - ds))
         else:
             segs = [(a.input, cs, ce) for cs, ce in cuts]
+
+        # cek tiap sumber: rentang masih di dalam video? ada audionya?
+        audio_of = {}
+        for i, (f, cs, ce) in enumerate(segs):
+            if f not in audio_of:
+                fdur, audio_of[f] = probe(f)
+            else:
+                fdur, _ = probe(f)
+            if url_mode and fdur is not None and ce > fdur + 0.5:
+                sys.exit(f"Rentang {a.cut[i]!r} melewati akhir video YouTube-nya. Cek lagi waktunya.")
+        if not any(audio_of.values()):
+            print("      video tidak punya suara -> diproses tanpa audio dan tanpa subtitle otomatis")
 
         # 1) potong (dan gabung) -> klip mentah 16:9. Presisi frame karena re-encode.
         raw = os.path.join(tmp, "raw.mp4")
@@ -188,8 +268,14 @@ def main():
             k = files.index(f)
             # setpts di depan: timestamp file hasil unduhan tidak selalu mulai dari 0
             fc += f"[{k}:v]setpts=PTS-STARTPTS,trim={cs}:{ce},setpts=PTS-STARTPTS,fps=30[v{i}];"
-            fc += (f"[{k}:a]asetpts=PTS-STARTPTS,atrim={cs}:{ce},asetpts=PTS-STARTPTS,"
-                   f"afade=t=in:d=0.06,afade=t=out:st={ce-cs-0.06:.3f}:d=0.06[a{i}];")
+            d = ce - cs
+            fd = min(0.06, d / 4)  # fade tidak boleh lebih panjang dari klipnya
+            fmt = "aformat=sample_rates=48000:channel_layouts=stereo"
+            if audio_of[f]:
+                fc += (f"[{k}:a]asetpts=PTS-STARTPTS,atrim={cs}:{ce},asetpts=PTS-STARTPTS,{fmt},"
+                       f"afade=t=in:d={fd:.3f},afade=t=out:st={d-fd:.3f}:d={fd:.3f}[a{i}];")
+            else:  # sumber tanpa suara -> isi dengan hening supaya gabungan tetap jalan
+                fc += f"anullsrc=r=48000:cl=stereo,atrim=duration={d:.3f},{fmt}[a{i}];"
         fc += "".join(f"[v{i}][a{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=1[v][a]"
         print(f"[1/3] memotong {n} bagian ...")
         run(["ffmpeg", "-y", "-v", "error"] + inputs + ["-filter_complex", fc, "-map", "[v]", "-map", "[a]",
@@ -199,6 +285,8 @@ def main():
         srt = None
         if a.srt:
             srt = os.path.join(tmp, "subs.srt"); shutil.copy(a.srt, srt)
+        elif not a.no_subs and not any(audio_of.values()):
+            print("[2/3] tanpa subtitle (video tidak bersuara)")
         elif not a.no_subs:
             print("[2/3] transkripsi (pertama kali akan mengunduh model) ...")
             words = transcribe(raw, a.lang, a.model)
