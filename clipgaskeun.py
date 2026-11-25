@@ -14,7 +14,7 @@ import argparse, json, math, os, re, shutil, subprocess, sys, tempfile
 from contextlib import contextmanager
 from importlib.util import find_spec
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # ───────────── tampilan terminal: pakai rich kalau ada, kalau tidak teks biasa ─────────────
 try:
@@ -26,11 +26,20 @@ except ImportError:
     _out = _err = None
 
 
+JSON_MODE = False  # --json: stdout hanya berisi JSON, semua pesan lain pindah ke stderr
+
+
+def set_json_mode():
+    global JSON_MODE, _out
+    JSON_MODE = True
+    _out = _err
+
+
 def say(msg, style=None):
     if _out:
         _out.print(msg, style=style, markup=False)
     else:
-        print(msg)
+        print(msg, file=sys.stderr if JSON_MODE else sys.stdout)
 
 
 def step(n, msg):
@@ -46,6 +55,8 @@ def warn(msg):
 
 
 def die(msg):
+    if JSON_MODE:
+        print(json.dumps({"error": msg}, ensure_ascii=False))
     if _err:
         _err.print(msg, style="bold red", markup=False)
     else:
@@ -145,20 +156,48 @@ def probe(path):
     return (float(dur) if dur else None), has_audio
 
 
-def download_section(ytdlp, url, start, end, prefix):
-    """Unduh hanya detik [start, end] (plus cadangan PAD) dari link.
-    Mengembalikan (path file, detik video tempat file itu dimulai)."""
-    ds = max(0, int(start) - PAD)
-    de = int(math.ceil(end)) + PAD
-    cmd = ytdlp + ["--no-playlist", "--download-sections", f"*{hms(ds)}-{hms(de)}",
-                   "--force-keyframes-at-cuts", "-f", "bv*[height<=1080]+ba/b",
-                   "--merge-output-format", "mp4", "-o", prefix + ".%(ext)s", url]
-    if subprocess.run(cmd).returncode:
+def ytdlp_run(cmd, quiet=False):
+    """Jalankan yt-dlp. Di mode --json keluarannya dialihkan ke stderr supaya stdout tetap JSON bersih."""
+    kw = {"stdout": sys.stderr} if JSON_MODE else {}
+    if quiet:
+        cmd = cmd + ["-q", "--no-warnings"]
+    if subprocess.run(cmd, **kw).returncode:
         die("yt-dlp gagal mengunduh (pesan di atas). Coba perbarui: pip install -U yt-dlp  (atau: winget upgrade yt-dlp)")
-    f = prefix + ".mp4"
-    if not os.path.isfile(f):
+
+
+def download_section(ytdlp, url, start, end, prefix, audio_only=False, pad=PAD):
+    """Unduh hanya detik [start, end] (plus cadangan pad) dari link.
+    Mengembalikan (path file, detik video tempat file itu dimulai)."""
+    ds = max(0, int(start) - pad)
+    de = int(math.ceil(end)) + pad
+    if audio_only:  # cukup suaranya (untuk analisis --auto): jauh lebih kecil dari video
+        cmd = ytdlp + ["--no-playlist", "--download-sections", f"*{hms(ds)}-{hms(de)}",
+                       "-f", "ba/b", "-o", prefix + ".%(ext)s", url]
+    else:
+        cmd = ytdlp + ["--no-playlist", "--download-sections", f"*{hms(ds)}-{hms(de)}",
+                       "--force-keyframes-at-cuts", "-f", "bv*[height<=1080]+ba/b",
+                       "--downloader-args", "ffmpeg:-hide_banner -loglevel error",
+                       "--merge-output-format", "mp4", "-o", prefix + ".%(ext)s", url]
+    ytdlp_run(cmd, quiet=audio_only)
+    if not audio_only and os.path.isfile(prefix + ".mp4"):
+        return prefix + ".mp4", ds
+    folder, base = os.path.split(prefix)
+    found = [os.path.join(folder, x) for x in os.listdir(folder or ".")
+             if x.startswith(base + ".") and not x.endswith((".part", ".ytdl"))]
+    if not found:
         die("File hasil unduhan tidak ditemukan.")
-    return f, ds
+    return found[0], ds
+
+
+def video_info(ytdlp, url):
+    """Info video dari YouTube (judul, durasi, heatmap) tanpa mengunduh videonya."""
+    r = subprocess.run(ytdlp + ["-J", "--no-playlist", "--no-warnings", url], capture_output=True, text=True)
+    if r.returncode:
+        die("yt-dlp gagal membaca info video:\n" + r.stderr[-800:])
+    try:
+        return json.loads(r.stdout)
+    except ValueError:
+        die("Info video dari yt-dlp tidak bisa dibaca.")
 
 
 def run(cmd, cwd=None):
@@ -210,6 +249,9 @@ def print_check():
 
 
 # ───────────── transkripsi ─────────────
+_MODELS = {}
+
+
 def transcribe(media, lang, model):
     try:
         from faster_whisper import WhisperModel
@@ -222,7 +264,9 @@ def transcribe(media, lang, model):
     if pcm.returncode or not pcm.stdout:
         die("Gagal membaca audio:\n" + pcm.stderr.decode(errors="ignore")[-800:])
     audio = np.frombuffer(pcm.stdout, dtype=np.float32)
-    m = WhisperModel(model, device="cpu", compute_type="int8")
+    if model not in _MODELS:  # model dimuat sekali saja per jalan (--auto mentranskripsi beberapa bagian)
+        _MODELS[model] = WhisperModel(model, device="cpu", compute_type="int8")
+    m = _MODELS[model]
     segs, info = m.transcribe(audio, language=lang, word_timestamps=True, vad_filter=True,
                               vad_parameters=dict(min_silence_duration_ms=300, speech_pad_ms=120),
                               condition_on_previous_text=False, beam_size=5)
@@ -355,6 +399,260 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return head + "\n".join(ev) + "\n"
 
 
+# ───────────── cari momen seru otomatis (--auto) ─────────────
+# Sinyal yang dipakai semuanya gratis & lokal:
+#  1) heatmap "Most Replayed" YouTube (kalau ada) = bagian yang paling sering diputar ulang penonton
+#  2) kerasnya suara per detik (teriak, tawa, heboh) dibanding biasanya di video itu
+#  3) kepadatan kata dari transkrip singkat (obrolan yang padat & seru)
+REGION_MARGIN = 15  # detik tambahan di kiri-kanan kandidat sebelum dicari potongan terbaiknya
+
+
+def _np():
+    try:
+        import numpy as np
+        return np
+    except ImportError:
+        die("numpy belum terpasang (ikut terpasang bersama faster-whisper). Jalankan: pip install faster-whisper")
+
+
+def loudness_curve(path, start=None, dur=None, rate=8000):
+    """Kerasnya suara (dB) per detik. Audio dibaca bertahap, jadi video berjam-jam pun tidak memenuhi RAM."""
+    np = _np()
+    cmd = ["ffmpeg", "-v", "error"]
+    if start is not None:
+        cmd += ["-ss", f"{start:.3f}"]
+    if dur is not None:
+        cmd += ["-t", f"{dur:.3f}"]
+    cmd += ["-i", path, "-vn", "-f", "f32le", "-ac", "1", "-ar", str(rate), "-"]
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    sec_bytes = rate * 4
+    out, buf = [], b""
+    while True:
+        chunk = p.stdout.read(sec_bytes * 60)
+        if not chunk:
+            break
+        buf += chunk
+        n = len(buf) // sec_bytes * sec_bytes
+        if n:
+            a = np.frombuffer(buf[:n], dtype=np.float32).reshape(-1, rate)
+            out.extend((10 * np.log10(np.mean(a * a, axis=1) + 1e-10)).tolist())
+            buf = buf[n:]
+    p.wait()
+    return out
+
+
+def _excite(db):
+    """dB per detik -> skor 'heboh' per detik: seberapa keras dibanding biasanya + lonjakan tiba-tiba."""
+    np = _np()
+    x = np.asarray(db, dtype=float)
+    if len(x) == 0:
+        return x
+    med = np.median(x)
+    mad = np.median(np.abs(x - med)) * 1.4826 + 1e-6
+    z = np.clip((x - med) / mad, -3, 6)
+    prev = np.concatenate([[x[0]] * 5, x])
+    base = np.array([prev[i:i + 5].mean() for i in range(len(x))])  # rata-rata 5 detik sebelumnya
+    spike = np.clip(x - base, 0, 20) / 10
+    return z + spike
+
+
+def loud_windows(db, length, k, min_gap=None):
+    """Pilih k potongan sepanjang `length` detik yang paling 'heboh', berjauhan satu sama lain
+    (min_gap detik antar-awal; default: 3x panjang atau 2 menit, mana yang lebih besar, dibatasi agar video pendek
+    tetap dapat kandidat). -> [(mulai, selesai, skor)] urut dari skor tertinggi."""
+    np = _np()
+    s = _excite(db)
+    if len(s) <= length:
+        return [(0, len(s), float(s.mean()) if len(s) else 0.0)]
+    c = np.concatenate([[0.0], np.cumsum(s)])
+    win = (c[length:] - c[:-length]) / length  # win[i] = rata-rata skor detik i .. i+length
+    if min_gap is None:
+        min_gap = max(length, min(max(3 * length, 120), len(s) // (2 * k)))
+    picks = []
+    for i in np.argsort(-win):
+        if all(abs(int(i) - p) >= min_gap for p, _ in picks):
+            picks.append((int(i), float(win[i])))
+            if len(picks) == k:
+                break
+    return [(i, i + length, v) for i, v in picks]
+
+
+def heatmap_regions(heatmap, duration, length, k):
+    """Data 'Most Replayed' -> k wilayah kandidat [{start,end,score}] (score 0-1).
+    Bagian paling awal dilewati: di sana grafiknya selalu tinggi karena semua orang mulai menonton dari situ."""
+    skip = max(5.0, 0.02 * duration)
+    bins = [h for h in heatmap if h.get("start_time", 0) >= skip and h.get("value") is not None]
+    picks = []
+    for h in sorted(bins, key=lambda h: -h["value"]):
+        c = (h["start_time"] + h["end_time"]) / 2
+        width = h["end_time"] - h["start_time"]
+        if any(abs(c - p["center"]) < max(length, width) for p in picks):
+            continue
+        half = max(width, length) / 2 + REGION_MARGIN
+        rs, re_ = max(0.0, c - half), min(duration, c + half)
+        picks.append({"start": rs, "end": re_, "center": c, "score": float(h["value"])})
+        if len(picks) == k:
+            break
+    return picks
+
+
+def snap_window(words, t0, t1, lo, hi):
+    """Geser awal/akhir potongan ke jeda kalimat terdekat supaya tidak terpotong di tengah kalimat.
+    words: [{text,start,end}] (waktu sama dengan t0/t1). lo/hi = batas wilayah yang boleh dipakai."""
+    if not words:
+        return t0, t1
+    def boundary_before(i):  # kata i mengawali kalimat?
+        return i == 0 or words[i]["start"] - words[i - 1]["end"] > 0.5 or re.search(r"[.?!,]$", words[i - 1]["text"])
+    def boundary_after(i):   # kata i mengakhiri kalimat?
+        return i == len(words) - 1 or words[i + 1]["start"] - words[i]["end"] > 0.5 or re.search(r"[.?!]$", words[i]["text"])
+    first = next((i for i, w in enumerate(words) if w["start"] >= t0), None)
+    if first is not None:
+        j = first
+        while j > 0 and not boundary_before(j) and t0 - words[j - 1]["start"] <= 5:
+            j -= 1
+        if boundary_before(j):
+            t0 = max(lo, words[j]["start"] - 0.15)
+    last = max((i for i, w in enumerate(words) if w["end"] <= t1), default=None)
+    if last is not None:
+        j = last
+        while j < len(words) - 1 and not boundary_after(j) and words[j + 1]["end"] - t1 <= 6:
+            j += 1
+        if boundary_after(j):
+            t1 = min(hi, words[j]["end"] + 0.35)
+    return t0, t1
+
+
+def best_window(words, db, length):
+    """Di dalam satu wilayah (waktu relatif awal wilayah): cari awal potongan sepanjang `length`
+    dengan gabungan kepadatan kata (60%) dan kehebohan suara (40%). -> (mulai, skor kepadatan kata/detik)."""
+    np = _np()
+    total = len(db)
+    if total <= length:
+        return 0.0, (len(words) / max(total, 1))
+    ex = _excite(db)
+    starts = range(0, total - length + 1)
+    dens = np.array([sum(1 for w in words if t <= w["start"] < t + length) / length for t in starts])
+    loud = np.array([ex[t:t + length].mean() for t in starts])
+    norm = lambda v: (v - v.min()) / (v.max() - v.min() + 1e-9)
+    score = 0.6 * norm(dens) + 0.4 * norm(loud)
+    i = int(np.argmax(score))
+    return float(i), float(dens[i])
+
+
+def find_moments(a, url_mode, ytdlp, tmp):
+    """Cari kandidat momen. -> (daftar kandidat, keterangan sumber). Kandidat: start,end,score,reason,snippet."""
+    L, k = a.auto_len, a.auto_n
+    method = None
+    if url_mode:
+        say("[auto] membaca info video (tanpa mengunduh) ...", "bold cyan")
+        info = video_info(ytdlp, a.input)
+        duration = float(info.get("duration") or 0)
+        heat = info.get("heatmap") or []
+        if heat and duration:
+            regions = heatmap_regions(heat, duration, L, k)
+            method = "heatmap"
+            note(f"pakai data Most Replayed YouTube ({len(heat)} titik, per ±{hms(duration / max(len(heat), 1))})")
+            for r in regions:
+                r["reason"] = "sering diputar ulang penonton"
+        else:
+            note("video ini tidak punya data Most Replayed -> mengunduh SUARANYA saja (sekali) untuk dianalisis")
+            ytdlp_run(ytdlp + ["--no-playlist", "-f", "ba/b", "-o", os.path.join(tmp, "full.%(ext)s"), a.input], quiet=True)
+            found = [os.path.join(tmp, x) for x in os.listdir(tmp) if x.startswith("full.") and not x.endswith(".part")]
+            if not found:
+                die("Audio video tidak berhasil diunduh.")
+            source, offset = found[0], 0.0
+    else:
+        source, offset = a.input, 0.0
+    if method is None:  # dari kerasnya suara seluruh video
+        say("[auto] mendengarkan kerasnya suara di seluruh video ...", "bold cyan")
+        with busy("menganalisis suara"):
+            db = loudness_curve(source)
+        if not db:
+            die("Tidak ada suara yang bisa dianalisis di video ini, jadi --auto tidak bisa mencari momen. Pakai --cut.")
+        duration = float(len(db))
+        wins = loud_windows(db, L, k)
+        top = max(v for _, _, v in wins) or 1.0
+        regions = [{"start": max(0.0, s - REGION_MARGIN), "end": min(duration, e + REGION_MARGIN),
+                    "score": max(0.0, v / top) if top > 0 else 0.0, "reason": "suara memuncak"} for s, e, v in wins]
+        method = "suara"
+
+    cands = []
+    for i, r in enumerate(regions, 1):
+        cand = {"start": r["start"] + (r["end"] - r["start"] - L) / 2, "score_a": r["score"], "reason": r["reason"],
+                "snippet": "", "density": None}
+        cand["end"] = cand["start"] + L
+        if not a.auto_cepat:
+            say(f"[auto] menilai kandidat {i}/{len(regions)} ({hms(r['start'])}-{hms(r['end'])}) ...", "bold cyan")
+            if url_mode and method == "heatmap":
+                f, ds = download_section(ytdlp, a.input, r["start"], r["end"], os.path.join(tmp, f"reg{i}"), audio_only=True, pad=0)
+                rs_in_file, base = r["start"] - ds, r["start"]
+            else:
+                f, rs_in_file, base = source, r["start"] - offset, r["start"]
+            clip = os.path.join(tmp, f"cand{i}.wav")
+            run(["ffmpeg", "-y", "-v", "error", "-ss", f"{max(0, rs_in_file):.3f}", "-t", f"{r['end'] - r['start']:.3f}",
+                 "-i", f, "-vn", "-ac", "1", "-ar", "16000", clip])
+            with busy("mentranskripsi singkat"):
+                words, _ = transcribe(clip, a.lang, a.auto_model)
+                db = loudness_curve(clip)
+            t, dens = best_window(words, db, L)
+            t0, t1 = snap_window(words, t, t + L, 0.0, len(db))
+            if t1 - t0 < L * 0.7:  # jangan sampai jadi terlalu pendek setelah digeser
+                t0, t1 = t, t + L
+            cand.update(start=base + t0, end=base + t1, density=dens,
+                        snippet=" ".join(w["text"] for w in words if w["start"] >= t0)[:90])
+        cands.append(cand)
+
+    dmax = max((c["density"] or 0) for c in cands) or 1.0
+    for c in cands:
+        if c["density"] is None:
+            c["score"] = c["score_a"]
+        else:
+            c["score"] = 0.6 * c["score_a"] + 0.4 * (c["density"] / dmax)
+            if c["density"] / dmax > 0.8:
+                c["reason"] += " + obrolan padat"
+    cands.sort(key=lambda c: -c["score"])
+    cands = dedupe(cands)
+    for i, c in enumerate(cands, 1):
+        c["rank"] = i
+        c["score"] = round(100 * c["score"])
+    return cands, method
+
+
+def dedupe(cands, max_overlap=0.5):
+    """Buang kandidat yang sebagian besar sama dengan kandidat berskor lebih tinggi (cands sudah urut skor)."""
+    kept = []
+    for c in cands:
+        if all(min(c["end"], k["end"]) - max(c["start"], k["start"])
+               <= max_overlap * min(c["end"] - c["start"], k["end"] - k["start"]) for k in kept):
+            kept.append(c)
+    return kept
+
+
+def show_candidates(cands):
+    if _out:
+        t = Table(title="Kandidat momen", show_lines=True)
+        for col in ("#", "Rentang", "Durasi", "Skor", "Alasan", "Cuplikan"):
+            t.add_column(col, overflow="fold")
+        for c in cands:
+            t.add_row(str(c["rank"]), f"{hms(c['start'])} - {hms(c['end'])}", f"{c['end'] - c['start']:.0f} dtk",
+                      str(c["score"]), c["reason"], c["snippet"] or "-")
+        _out.print(t)
+    else:
+        for c in cands:
+            say(f"{c['rank']}. {hms(c['start'])}-{hms(c['end'])}  skor {c['score']}  {c['reason']}  {c['snippet']}")
+
+
+def parse_pick(text, n):
+    """'1,3' -> [1, 3]; salah -> None."""
+    try:
+        picks = [int(x) for x in re.split(r"[,\s]+", text.strip()) if x]
+    except ValueError:
+        return None
+    if not picks or any(not 1 <= p <= n for p in picks):
+        return None
+    return list(dict.fromkeys(picks))
+
+
 # ───────────── preset ─────────────
 BASE = dict(style="biasa", sub_pos="bawah", font="Poppins", font_size=10, sub_color="putih",
             highlight="kuning", sub_bg="tidak", logo_scale=0.62)
@@ -395,6 +693,14 @@ def build_parser():
     ap.add_argument("input", nargs="?", help="file video lokal ATAU link YouTube (http...)")
     ap.add_argument("--cut", action="append", metavar="MULAI-SELESAI",
                     help="rentang waktu, boleh diulang untuk digabung (mis. 1:05-1:40). Untuk link = waktu di video YouTube")
+    g0 = ap.add_argument_group("cari momen otomatis (pengganti --cut)")
+    g0.add_argument("--auto", action="store_true", help="cari momen seru sendiri: Most Replayed YouTube, kerasnya suara, kepadatan obrolan")
+    g0.add_argument("--auto-len", type=ranged(int, 15, 90), default=45, help="panjang tiap momen dalam detik, 15-90 (default 45)")
+    g0.add_argument("--auto-n", type=ranged(int, 1, 10), default=5, help="jumlah kandidat yang ditampilkan, 1-10 (default 5)")
+    g0.add_argument("--auto-cepat", action="store_true", help="lewati penilaian transkrip (lebih cepat, tanpa cuplikan kalimat)")
+    g0.add_argument("--auto-model", default="base", help="model whisper untuk menilai kandidat (default base, cepat)")
+    g0.add_argument("--pick", help="nomor kandidat yang langsung dirender, mis. 1 atau 1,3 (tanpa ditanya)")
+    ap.add_argument("--json", action="store_true", help="keluaran JSON (untuk skrip / coding agent). Dengan --auto tanpa --pick: hanya daftar kandidat")
     ap.add_argument("-o", "--out", help="file hasil. Default: <nama>_short.mp4 di sebelah video asli (untuk link: clipgaskeun_short.mp4 di folder tempatmu menjalankan). Kalau sudah ada, otomatis diberi nomor _2, _3, ...")
     ap.add_argument("--preset", choices=sorted(PRESETS), help="gaya siap pakai: tiktok (karaoke kuning), podcast (kotak latar), gaming (karaoke hijau di atas)")
     ap.add_argument("--lang", default=None, help="bahasa ucapan, mis. id / en (default: dideteksi otomatis)")
@@ -417,54 +723,17 @@ def build_parser():
     return ap
 
 
-def main(argv=None):
-    ap = build_parser()
-    a = ap.parse_args(argv)
-    if a.cek:
-        sys.exit(print_check())
-    if not a.input or not a.cut:
-        ap.error("butuh video/link dan minimal satu --cut. Contoh: clipgaskeun video.mp4 --cut 1:05-1:40  (cek kelengkapan: clipgaskeun --cek)")
-    cfg = resolve(a)
+def default_out(a, url_mode, suffix="short"):
+    return f"clipgaskeun_{suffix}.mp4" if url_mode else os.path.splitext(a.input)[0] + f"_{suffix}.mp4"
 
-    if not shutil.which("ffmpeg"):
-        die("ffmpeg tidak ditemukan di PATH. Jalankan `clipgaskeun --cek` untuk cara memasangnya.")
-    url_mode = is_url(a.input)
-    if not url_mode and not os.path.isfile(a.input):
-        die(f"File tidak ada: {a.input}")
-    ytdlp = None
-    if url_mode:
-        ytdlp = find_ytdlp()
-        if not ytdlp:
-            die("yt-dlp belum terpasang (dibutuhkan untuk link). Pasang: winget install yt-dlp  atau  pip install yt-dlp")
-    if a.logo and not os.path.isfile(a.logo):
-        die(f"File logo tidak ada: {a.logo}")
-    if a.srt and not os.path.isfile(a.srt):
-        die(f"File SRT tidak ada: {a.srt}")
-    if re.search(r"[',:;\\\[\]=]", cfg["font"]):
-        die(f"Nama font tidak boleh berisi karakter ' , : ; \\ [ ] = (kamu isi {cfg['font']!r})")
-    cuts = []
-    for c in a.cut:
-        r = parse_cut(c)
-        if isinstance(r, str):
-            die(r)
-        cuts.append(r)
-    if not url_mode:
-        dur, _ = probe(a.input)
-        if dur is not None:
-            for (cs, ce), c in zip(cuts, a.cut):
-                if cs >= dur:
-                    die(f"Rentang {c!r} dimulai setelah video habis (panjang video {hms(dur)}).")
-                if ce > dur + 0.5:
-                    die(f"Rentang {c!r} melewati akhir video (panjang video {hms(dur)}). Ganti waktu selesainya.")
+
+def render_clip(a, cfg, url_mode, ytdlp, cuts, labels, out):
+    """Potong + subtitle + komposisi 9:16 untuk satu hasil. cuts = [(mulai, selesai)] dalam detik."""
     total = sum(ce - cs for cs, ce in cuts)
     if total > LONG_WARN and not a.no_subs and not a.srt:
         warn(f"total potongan {hms(total)}. Transkripsi akan lama dan makan RAM; pertimbangkan potongan lebih pendek.")
-    out = a.out or ("clipgaskeun_short.mp4" if url_mode else os.path.splitext(a.input)[0] + "_short.mp4")
-    if not a.out:  # nama otomatis -> jangan menimpa hasil sebelumnya (kalau -o diberikan, itu pilihanmu)
-        out = unique_path(out)
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
-
-    say(f"ClipGaskeun {__version__}" + (f" · preset {a.preset}" if a.preset else ""), "bold")
+    cfg = dict(cfg)
     tmp = tempfile.mkdtemp(prefix="clipgaskeun_")
     try:
         # 0) siapkan sumber tiap bagian: file lokal, atau unduh hanya bagian itu dari link
@@ -484,7 +753,7 @@ def main(argv=None):
             fdur, has_a = probe(f)
             audio_of.setdefault(f, has_a)
             if url_mode and fdur is not None and ce > fdur + 0.5:
-                die(f"Rentang {a.cut[i]!r} melewati akhir video YouTube-nya. Cek lagi waktunya.")
+                die(f"Rentang {labels[i]!r} melewati akhir video YouTube-nya. Cek lagi waktunya.")
         silent = not any(audio_of.values())
         if silent:
             note("video tidak punya suara -> diproses tanpa audio dan tanpa subtitle otomatis")
@@ -558,11 +827,109 @@ def main(argv=None):
         with busy("merender"):
             run(cmd, cwd=tmp)
         say(f"Selesai: {out}", "bold green")
+        return out
     finally:
         if a.keep_tmp:
             say(f"tmp: {tmp}")
         else:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+def main(argv=None):
+    ap = build_parser()
+    a = ap.parse_args(argv)
+    if a.json:
+        set_json_mode()
+    if a.cek:
+        sys.exit(print_check())
+    if not a.input or not (a.cut or a.auto):
+        ap.error("butuh video/link dan --cut (atau --auto). Contoh: clipgaskeun video.mp4 --cut 1:05-1:40  (cek kelengkapan: clipgaskeun --cek)")
+    if a.cut and a.auto:
+        ap.error("pilih salah satu: --cut (kamu tentukan sendiri) atau --auto (dicarikan)")
+    if a.pick and not a.auto:
+        ap.error("--pick hanya dipakai bersama --auto")
+    cfg = resolve(a)
+
+    if not shutil.which("ffmpeg"):
+        die("ffmpeg tidak ditemukan di PATH. Jalankan `clipgaskeun --cek` untuk cara memasangnya.")
+    url_mode = is_url(a.input)
+    if not url_mode and not os.path.isfile(a.input):
+        die(f"File tidak ada: {a.input}")
+    ytdlp = None
+    if url_mode:
+        ytdlp = find_ytdlp()
+        if not ytdlp:
+            die("yt-dlp belum terpasang (dibutuhkan untuk link). Pasang: winget install yt-dlp  atau  pip install yt-dlp")
+    if a.logo and not os.path.isfile(a.logo):
+        die(f"File logo tidak ada: {a.logo}")
+    if a.srt and not os.path.isfile(a.srt):
+        die(f"File SRT tidak ada: {a.srt}")
+    if a.srt and a.auto:
+        die("--srt tidak bisa dipakai bersama --auto (waktunya tidak akan cocok dengan momen yang dipilih)")
+    if re.search(r"[',:;\\\[\]=]", cfg["font"]):
+        die(f"Nama font tidak boleh berisi karakter ' , : ; \\ [ ] = (kamu isi {cfg['font']!r})")
+
+    say(f"ClipGaskeun {__version__}" + (f" · preset {a.preset}" if a.preset else ""), "bold")
+    result = {"version": __version__, "input": a.input}
+
+    if not a.auto:
+        cuts = []
+        for c in a.cut:
+            r = parse_cut(c)
+            if isinstance(r, str):
+                die(r)
+            cuts.append(r)
+        if not url_mode:
+            dur, _ = probe(a.input)
+            if dur is not None:
+                for (cs, ce), c in zip(cuts, a.cut):
+                    if cs >= dur:
+                        die(f"Rentang {c!r} dimulai setelah video habis (panjang video {hms(dur)}).")
+                    if ce > dur + 0.5:
+                        die(f"Rentang {c!r} melewati akhir video (panjang video {hms(dur)}). Ganti waktu selesainya.")
+        out = a.out or unique_path(default_out(a, url_mode))  # nama otomatis tidak menimpa hasil lama
+        result["outputs"] = [render_clip(a, cfg, url_mode, ytdlp, cuts, a.cut, out)]
+    else:
+        tmp = tempfile.mkdtemp(prefix="clipgaskeun_auto_")
+        try:
+            cands, method = find_moments(a, url_mode, ytdlp, tmp)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        result.update(method=method, candidates=[
+            {k: (round(c[k], 2) if isinstance(c[k], float) else c[k]) for k in ("rank", "start", "end", "score", "reason", "snippet")}
+            for c in cands])
+        show_candidates(cands)
+        if a.pick:
+            picks = parse_pick(a.pick, len(cands))
+            if not picks:
+                die(f"--pick tidak valid: {a.pick!r}. Isi nomor 1-{len(cands)}, mis. 1 atau 1,3")
+        elif a.json or not sys.stdin.isatty():
+            picks = []  # mode skrip: cukup daftar kandidat
+        else:
+            while True:
+                ans = input(f"Pilih nomor yang dirender (mis. 1 atau 1,3; Enter = 1; q = batal): ").strip().lower()
+                if ans == "q":
+                    picks = []
+                    break
+                picks = parse_pick(ans or "1", len(cands))
+                if picks:
+                    break
+                say(f"Isi nomor 1-{len(cands)}, pisahkan dengan koma.", "yellow")
+        outputs = []
+        for p in picks:
+            c = cands[p - 1]
+            say(f"Momen #{p}: {hms(c['start'])} - {hms(c['end'])}", "bold")
+            if a.out:
+                base, ext = os.path.splitext(a.out)
+                out = a.out if len(picks) == 1 else f"{base}_{p}{ext or '.mp4'}"
+            else:
+                out = unique_path(default_out(a, url_mode, f"auto{p}"))
+            outputs.append(render_clip(a, cfg, url_mode, ytdlp, [(c["start"], c["end"])], [f"auto #{p}"], out))
+        result["outputs"] = outputs
+        if not picks and not a.json:
+            say("Tidak ada yang dirender. Untuk merender nanti: tambahkan --pick NOMOR, atau pakai --cut dengan rentang di tabel.", "yellow")
+    if a.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

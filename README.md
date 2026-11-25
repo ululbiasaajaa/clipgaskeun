@@ -76,6 +76,30 @@ clipgaskeun "https://www.youtube.com/watch?v=ID_VIDEO" --cut 4:09:41-4:10:17
 - Hasilnya disimpan **di folder tempatmu menjalankan perintah**, bernama `clipgaskeun_short.mp4`.
 - Boleh menggabung beberapa bagian dari satu link dengan `--cut` berulang.
 
+### Cari momen seru otomatis (`--auto`)
+Tidak tahu menit berapa yang seru? Biarkan ClipGaskeun mencarikan:
+```
+clipgaskeun "https://www.youtube.com/watch?v=ID_VIDEO" --auto
+clipgaskeun stream.mp4 --auto --preset tiktok
+```
+Muncul tabel 5 kandidat berisi rentang waktu, skor, alasan, dan cuplikan kalimat pertamanya. Ketik nomornya (`1`, atau `1,3` untuk beberapa sekaligus). Tiap nomor jadi satu Short terpisah (`<nama>_auto1.mp4`, `_auto3.mp4`, ...).
+
+Cara mencarinya, semuanya lokal dan gratis:
+- **Link YouTube:** memakai data **Most Replayed** (bagian yang paling sering diputar ulang penonton), dibaca tanpa mengunduh videonya. Lalu untuk tiap kandidat, hanya *suaranya* yang diunduh untuk mencari potongan paling pas.
+- **File di komputer, atau video tanpa data Most Replayed:** mencari bagian yang suaranya paling memuncak (tawa, teriak, heboh) dibanding biasanya di video itu.
+- Tiap kandidat lalu dinilai ulang dengan **kepadatan obrolan** dari transkrip singkat, dan awal-akhirnya digeser ke **jeda kalimat** supaya tidak terpotong di tengah omongan.
+
+Ini perkiraan, bukan jaminan: skor tinggi berarti "layak dicek dulu". Tonton cuplikannya sebelum diunggah.
+
+| Opsi | Fungsi |
+|---|---|
+| `--auto-len 45` | Panjang tiap momen, 15–90 detik (default 45). |
+| `--auto-n 5` | Jumlah kandidat, 1–10 (default 5). |
+| `--pick 1,3` | Langsung render nomor itu tanpa ditanya. |
+| `--auto-cepat` | Lewati penilaian transkrip: jauh lebih cepat, tapi tanpa cuplikan kalimat. |
+| `--auto-model` | Model Whisper untuk menilai kandidat (default `base`, cepat). Subtitle hasil akhir tetap memakai `--model`. |
+| `--json` | Keluaran JSON (daftar kandidat dan file hasil), untuk skrip atau coding agent seperti Claude Code. |
+
 ### Di mana hasilnya, dan apakah tertimpa?
 - Mau lokasi atau nama lain: pakai `-o`, misalnya `-o D:\Shorts\klip1.mp4`. Folder yang belum ada dibuat otomatis.
 - Kalau nama otomatis sudah dipakai, hasil baru diberi nomor (`_short_2.mp4`, `_short_3.mp4`, ...), jadi **klip sebelumnya tidak tertimpa**. Kalau kamu memakai `-o` dengan nama yang sudah ada, file itu akan ditimpa.
@@ -98,6 +122,7 @@ Tanpa `--preset`: subtitle putih bergaris tepi hitam di bawah video. Opsi yang k
 | Opsi | Fungsi |
 |---|---|
 | `--cut MULAI-SELESAI` | Rentang waktu (`1:05-1:40`). Boleh diulang, bagian-bagiannya digabung berurutan. |
+| `--auto` | Cari momen seru otomatis (pengganti `--cut`, lihat di atas). |
 | `-o, --out` | Nama dan lokasi file hasil. |
 | `--preset` | `tiktok`, `podcast`, atau `gaming` (lihat di atas). |
 | `--lang` | Bahasa ucapan, mis. `id` atau `en`. Default: dideteksi otomatis. |
@@ -125,11 +150,16 @@ Jalankan `clipgaskeun --cek` dulu: biasanya langsung kelihatan apa yang kurang.
 - **`ffmpeg tidak ditemukan`**: ffmpeg belum terpasang atau belum ada di PATH. Ulangi langkah 1 dan buka terminal baru.
 - **`faster-whisper belum terpasang`** / **`yt-dlp belum terpasang`**: pakai cara pasang cepat (langkah 2a), atau `pip install -r requirements.txt`.
 - **`clipgaskeun` tidak dikenali** setelah pipx: jalankan `pipx ensurepath`, lalu tutup dan buka lagi terminal.
-- **`yt-dlp gagal mengunduh`**: YouTube sering mengubah sistemnya, jadi perbarui yt-dlp dengan `pip install -U yt-dlp` (kalau lewat pipx: `pipx upgrade clipgaskeun`), lalu coba lagi.
+- **`yt-dlp gagal mengunduh`**: YouTube sering mengubah sistemnya, jadi perbarui yt-dlp dengan `pip install -U "yt-dlp[default]"` (kalau lewat pipx: `pipx upgrade clipgaskeun`), lalu coba lagi.
+- **Peringatan `n challenge solving failed` / `Error solving ... using "deno"`**: skrip pemecah yt-dlp belum mengenal pemutar YouTube yang baru. Perbarui yt-dlp seperti di atas. Supaya selalu memakai skrip terbaru, buat file konfigurasi yt-dlp berisi `--remote-components ejs:github`:
+  - Windows (cmd): `mkdir "%APPDATA%\yt-dlp"` lalu `echo --remote-components ejs:github> "%APPDATA%\yt-dlp\config.txt"`
+  - macOS/Linux: `mkdir -p ~/.config/yt-dlp && echo "--remote-components ejs:github" > ~/.config/yt-dlp/config`
+- **Ada dua yt-dlp terpasang** (cek dengan `where yt-dlp` di Windows, `which -a yt-dlp` di macOS/Linux): ClipGaskeun memakai yang paling atas, jadi perbarui yang itu.
 - **`0 kata`**: tidak ada ucapan di bagian itu, jadi video dirender tanpa subtitle.
 - **`Format waktu salah`**: cek penulisan `--cut`, misalnya `1:05-1:40` (bukan `1::05` atau `1:75`).
 - **`melewati akhir video`**: waktu selesai lebih panjang dari videonya. Cek panjang video lalu ganti angkanya.
 - **Bahasa terdeteksi salah / subtitle jadi terjemahan**: tambahkan `--lang id` (atau bahasa yang benar).
+- **`--auto` lama di video panjang**: untuk file lokal, seluruh suara video dianalisis dulu (stream 4 jam butuh beberapa menit). Pakai `--auto-cepat` atau link YouTube yang punya data Most Replayed.
 - **Subtitle salah-salah kata**: coba model lebih besar, misalnya `--model medium`.
 
 ## Untuk yang mau ikut mengembangkan

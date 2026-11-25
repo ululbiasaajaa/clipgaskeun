@@ -82,3 +82,55 @@ def test_preset_and_override():
     assert cfg["style"] == "biasa" and cfg["font_size"] == 9  # opsi yang ditulis menang atas preset
     cfg = cg.resolve(ap.parse_args(["v.mp4", "--cut", "1-3"]))
     assert cfg["style"] == "biasa" and cfg["sub_color"] == "FFFFFF"
+
+
+# ───────────── --auto ─────────────
+def test_heatmap_regions_skips_start_and_overlap():
+    heat = [{"start_time": i * 10, "end_time": (i + 1) * 10, "value": v}
+            for i, v in enumerate([1.0, 0.2, 0.9, 0.85, 0.1, 0.1, 0.7, 0.1, 0.1, 0.1])]
+    r = cg.heatmap_regions(heat, 100, 20, 3)
+    centers = [x["center"] for x in r]
+    assert 5 not in centers                  # bin pertama (0-10 s) dilewati
+    assert centers[0] == 25                  # puncak berikutnya
+    assert 35 not in centers                 # terlalu dekat dengan 25
+    assert all(0 <= x["start"] < x["end"] <= 100 for x in r)
+
+
+def test_loud_windows_finds_loud_part():
+    db = [-40.0] * 60 + [-15.0] * 10 + [-40.0] * 60
+    (s, e, _), = cg.loud_windows(db, 10, 1)
+    assert 55 <= s <= 65 and e - s == 10
+
+
+def test_snap_window_moves_to_sentence_edges():
+    words = [W("Halo.", 0.0, 0.5), W("Ini", 1.5, 1.7), W("kalimat", 1.8, 2.2), W("panjang", 2.3, 2.7),
+             W("sekali.", 2.8, 3.2), W("Lalu", 4.5, 4.8)]
+    t0, t1 = cg.snap_window(words, 2.0, 2.9, 0, 10)
+    assert abs(t0 - 1.35) < 1e-6           # mundur ke awal kalimat "Ini ..."
+    assert abs(t1 - 3.55) < 1e-6           # maju ke akhir "sekali."
+
+
+def test_parse_pick_and_dedupe():
+    assert cg.parse_pick("1,3", 5) == [1, 3]
+    assert cg.parse_pick("3 1 3", 5) == [3, 1]
+    assert cg.parse_pick("0", 5) is None and cg.parse_pick("x", 5) is None and cg.parse_pick("6", 5) is None
+    cands = [{"start": 0, "end": 10}, {"start": 2, "end": 12}, {"start": 20, "end": 30}]
+    assert [c["start"] for c in cg.dedupe(cands)] == [0, 20]
+
+
+def test_cli_rules():
+    import pytest
+    ap = cg.build_parser()
+    a = ap.parse_args(["v.mp4", "--auto", "--auto-len", "30"])
+    assert a.auto and a.auto_len == 30 and a.auto_model == "base"
+    with pytest.raises(SystemExit):
+        ap.parse_args(["v.mp4", "--auto", "--auto-len", "5"])
+
+
+def test_loud_windows_are_spread_out():
+    db = [-40.0] * 3600
+    for start in (1000, 1060, 1120, 2500):  # tiga puncak berdekatan + satu jauh
+        db[start:start + 20] = [-10.0] * 20
+    picks = cg.loud_windows(db, 45, 2)
+    starts = sorted(s for s, _, _ in picks)
+    assert starts[1] - starts[0] >= 135      # kandidat kedua tidak boleh tetangga kandidat pertama
