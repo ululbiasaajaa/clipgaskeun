@@ -13,7 +13,7 @@ Cut long videos (streams, podcasts, etc.) into 9:16 Shorts with a blurred backgr
 ## Requirements
 - **ffmpeg** (every install method)
 - **Deno** (YouTube links only): yt-dlp uses it to get past YouTube's player checks. Windows: `winget install DenoLand.Deno`, macOS: `brew install deno`.
-- **Python 3.9+** ([python.org](https://www.python.org/downloads/), tick "Add Python to PATH" on Windows). *Not needed* for the Windows `.exe`.
+- **Python 3.10+** ([python.org](https://www.python.org/downloads/), tick "Add Python to PATH" on Windows). *Not needed* for the Windows `.exe`.
 - faster-whisper (subtitles), yt-dlp (YouTube links) and rich (terminal display) come included with both the `.exe` and the quick install.
 
 ## Easiest (Windows): the .exe, no Python needed

@@ -8,7 +8,7 @@ version = "0.4.0"
 description = "Potong video panjang jadi Shorts 9:16 dengan latar blur, subtitle otomatis, dan watermark. Lokal, gratis."
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = ["faster-whisper", "yt-dlp", "rich"]
 
 [project.urls]

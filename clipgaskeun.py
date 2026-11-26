@@ -233,7 +233,7 @@ def check_deps():
     if FROZEN:
         rows = [("ClipGaskeun .exe", True, True, f"versi {__version__} (Python sudah termasuk)")]
     else:
-        rows = [("Python 3.9+", True, sys.version_info >= (3, 9), sys.version.split()[0])]
+        rows = [("Python 3.10+", True, sys.version_info >= (3, 10), sys.version.split()[0])]
     for tool in ("ffmpeg", "ffprobe"):
         p = shutil.which(tool)
         rows.append((tool, tool == "ffmpeg", bool(p), p or INSTALL_HINT[tool]))
@@ -570,7 +570,7 @@ def find_moments(a, url_mode, ytdlp, tmp):
         if heat and duration:
             regions = heatmap_regions(heat, duration, L, k)
             method = "heatmap"
-            note(f"pakai data Most Replayed YouTube ({len(heat)} titik, per ±{hms(duration / max(len(heat), 1))})")
+            note(f"pakai data Most Replayed YouTube ({len(heat)} titik, per kira-kira {hms(duration / max(len(heat), 1))})")
             for r in regions:
                 r["reason"] = "sering diputar ulang penonton"
         else:
@@ -888,7 +888,7 @@ def main(argv=None):
     if re.search(r"[',:;\\\[\]=]", cfg["font"]):
         die(f"Nama font tidak boleh berisi karakter ' , : ; \\ [ ] = (kamu isi {cfg['font']!r})")
 
-    say(f"ClipGaskeun {__version__}" + (f" · preset {a.preset}" if a.preset else ""), "bold")
+    say(f"ClipGaskeun {__version__}" + (f" - preset {a.preset}" if a.preset else ""), "bold")
     result = {"version": __version__, "input": a.input}
 
     if not a.auto:

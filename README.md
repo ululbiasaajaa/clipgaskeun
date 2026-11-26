@@ -11,7 +11,7 @@ Potong video panjang (stream, podcast, dll) jadi Shorts 9:16 dengan latar blur, 
 ## Yang dibutuhkan
 - **ffmpeg** (semua cara pasang)
 - **Deno** (hanya untuk link YouTube): dipakai yt-dlp menembus sistem YouTube. Windows: `winget install DenoLand.Deno`, macOS: `brew install deno`.
-- **Python 3.9+** ([python.org](https://www.python.org/downloads/), centang "Add Python to PATH" saat instal di Windows). *Tidak perlu* kalau memakai versi `.exe` Windows.
+- **Python 3.10+** ([python.org](https://www.python.org/downloads/), centang "Add Python to PATH" saat instal di Windows). *Tidak perlu* kalau memakai versi `.exe` Windows.
 - faster-whisper (subtitle), yt-dlp (link YouTube), dan rich (tampilan terminal) ikut terpasang otomatis di versi `.exe` maupun cara pasang cepat.
 
 ## Paling gampang (Windows): versi .exe, tanpa Python
