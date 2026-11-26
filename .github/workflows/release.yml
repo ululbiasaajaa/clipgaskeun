@@ -1,0 +1,75 @@
+name: rilis-windows
+# Membuat clipgaskeun-windows.zip (clipgaskeun.exe + semua yang dibutuhkan kecuali ffmpeg)
+# setiap kali tag versi (mis. v0.4.0) di-push, lalu memasangnya di halaman Releases.
+# Bisa juga dijalankan manual dari tab Actions (hasilnya diunduh sebagai artifact) untuk uji coba.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Pasang dependensi
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller faster-whisper "yt-dlp[default]" rich pytest
+
+      - name: Tes
+        run: python -m pytest -q
+
+      - name: Bangun clipgaskeun.exe
+        run: >
+          pyinstaller --noconfirm --onedir --console --name clipgaskeun
+          --collect-all faster_whisper --collect-all ctranslate2
+          --collect-binaries onnxruntime --collect-data onnxruntime --hidden-import onnxruntime
+          --collect-all av --collect-submodules yt_dlp --collect-all yt_dlp_ejs --collect-submodules rich
+          --exclude-module matplotlib --exclude-module pandas --exclude-module scipy
+          --exclude-module PIL --exclude-module tkinter --exclude-module IPython --exclude-module pytest
+          clipgaskeun.py
+
+      - name: Pasang ffmpeg (hanya untuk menguji .exe)
+        run: choco install ffmpeg -y --no-progress
+
+      - name: Uji clipgaskeun.exe
+        shell: pwsh
+        run: |
+          $env:Path = "C:\ProgramData\chocolatey\bin;$env:Path"
+          $exe = "dist\clipgaskeun\clipgaskeun.exe"
+          & $exe --version
+          & $exe -m yt_dlp --version
+          & $exe --cek
+          ffmpeg -v error -f lavfi -i testsrc=size=1280x720:rate=30:duration=6 -f lavfi -i sine=frequency=440:duration=6 -shortest -c:v libx264 -c:a aac uji.mp4
+          & $exe uji.mp4 --cut 1-4 --model tiny --preset tiktok -o hasil\uji_short.mp4
+          if (!(Test-Path hasil\uji_short.mp4)) { throw "clipgaskeun.exe tidak menghasilkan video" }
+
+      - name: Bungkus jadi zip
+        shell: pwsh
+        run: |
+          Copy-Item README.md, README.en.md, LICENSE, clipgaskeun-watermark.png dist\clipgaskeun\
+          Compress-Archive -Path dist\clipgaskeun -DestinationPath clipgaskeun-windows.zip
+          "{0:N0} MB" -f ((Get-Item clipgaskeun-windows.zip).Length / 1MB)
+
+      - name: Simpan sebagai artifact (uji coba manual)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: clipgaskeun-windows
+          path: clipgaskeun-windows.zip
+
+      - name: Pasang di halaman Releases
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: clipgaskeun-windows.zip
+          generate_release_notes: true

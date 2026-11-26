@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clipgaskeun"
-version = "0.3.0"
+version = "0.4.0"
 description = "Potong video panjang jadi Shorts 9:16 dengan latar blur, subtitle otomatis, dan watermark. Lokal, gratis."
 readme = "README.md"
 license = { text = "MIT" }

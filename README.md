@@ -1,5 +1,7 @@
 # ClipGaskeun
 
+**Bahasa Indonesia** · [English](README.en.md)
+
 Potong video panjang (stream, podcast, dll) jadi Shorts 9:16 dengan latar blur, subtitle otomatis, dan watermark opsional. Bisa dari file di komputermu **atau langsung dari link YouTube**. Jalan lokal, gratis, tanpa API berbayar.
 
 ![Sebelum 16:9, sesudah 9:16 dengan latar blur, subtitle otomatis, dan watermark](docs/demo.gif)
@@ -7,11 +9,25 @@ Potong video panjang (stream, podcast, dll) jadi Shorts 9:16 dengan latar blur, 
 *Contoh di atas: rekaman layar berbahasa Indonesia, diproses dengan satu perintah. Bahasa dideteksi otomatis.*
 
 ## Yang dibutuhkan
-- **Python 3.9+** ([python.org](https://www.python.org/downloads/), centang "Add Python to PATH" saat instal di Windows)
-- **ffmpeg**
-- faster-whisper (subtitle), yt-dlp (link YouTube), dan rich (tampilan terminal). Ketiganya ikut terpasang otomatis kalau kamu memakai cara pasang cepat di bawah.
+- **ffmpeg** (semua cara pasang)
+- **Deno** (hanya untuk link YouTube): dipakai yt-dlp menembus sistem YouTube. Windows: `winget install DenoLand.Deno`, macOS: `brew install deno`.
+- **Python 3.9+** ([python.org](https://www.python.org/downloads/), centang "Add Python to PATH" saat instal di Windows). *Tidak perlu* kalau memakai versi `.exe` Windows.
+- faster-whisper (subtitle), yt-dlp (link YouTube), dan rich (tampilan terminal) ikut terpasang otomatis di versi `.exe` maupun cara pasang cepat.
 
-## Pasang
+## Paling gampang (Windows): versi .exe, tanpa Python
+1. Pasang ffmpeg: buka PowerShell, jalankan `winget install ffmpeg` (untuk link YouTube, tambah `winget install DenoLand.Deno`). Tutup lalu buka lagi terminalnya.
+2. Unduh **`clipgaskeun-windows.zip`** dari halaman [Releases](https://github.com/ululbiasaajaa/clipgaskeun/releases/latest), lalu ekstrak.
+3. Buka folder `clipgaskeun` hasil ekstrak, klik kolom alamat di File Explorer, ketik `cmd`, lalu Enter. Terminal terbuka di folder itu.
+4. Pakai seperti contoh di bawah, dengan `clipgaskeun.exe` di depan:
+   ```
+   clipgaskeun.exe D:\Video\stream.mp4 --cut 1:05-1:40 --preset tiktok
+   clipgaskeun.exe "https://www.youtube.com/watch?v=ID_VIDEO" --auto
+   ```
+Kalau `clipgaskeun.exe` diklik dua kali, muncul petunjuk singkat dan hasil cek kelengkapan. Programnya sendiri dijalankan lewat terminal.
+
+Kalau YouTube tiba-tiba gagal diunduh, biasanya yt-dlp di dalam paket sudah kedaluwarsa. Pasang yt-dlp terpisah (`winget install yt-dlp`, perbarui dengan `winget upgrade yt-dlp`). ClipGaskeun otomatis memakai yt-dlp yang terpasang di sistem, jadi kamu tidak perlu menunggu versi `.exe` baru.
+
+## Pasang (semua sistem, lewat Python)
 
 ### 1. Pasang ffmpeg
 - **Windows:** buka PowerShell, jalankan `winget install ffmpeg`. Tutup lalu buka lagi terminalnya.
@@ -149,6 +165,7 @@ clipgaskeun "https://www.youtube.com/watch?v=ID_VIDEO" --cut 12:00-12:45 --lang 
 Jalankan `clipgaskeun --cek` dulu: biasanya langsung kelihatan apa yang kurang.
 - **`ffmpeg tidak ditemukan`**: ffmpeg belum terpasang atau belum ada di PATH. Ulangi langkah 1 dan buka terminal baru.
 - **`faster-whisper belum terpasang`** / **`yt-dlp belum terpasang`**: pakai cara pasang cepat (langkah 2a), atau `pip install -r requirements.txt`.
+- **`clipgaskeun.exe` diblokir Windows ("Windows protected your PC")**: file ini belum punya tanda tangan digital berbayar. Klik **More info → Run anyway**, atau klik kanan file zip → Properties → centang **Unblock** sebelum diekstrak.
 - **`clipgaskeun` tidak dikenali** setelah pipx: jalankan `pipx ensurepath`, lalu tutup dan buka lagi terminal.
 - **`yt-dlp gagal mengunduh`**: YouTube sering mengubah sistemnya, jadi perbarui yt-dlp dengan `pip install -U "yt-dlp[default]"` (kalau lewat pipx: `pipx upgrade clipgaskeun`), lalu coba lagi.
 - **Peringatan `n challenge solving failed` / `Error solving ... using "deno"`**: skrip pemecah yt-dlp belum mengenal pemutar YouTube yang baru. Perbarui yt-dlp seperti di atas. Supaya selalu memakai skrip terbaru, buat file konfigurasi yt-dlp berisi `--remote-components ejs:github`:
@@ -169,6 +186,8 @@ pip install pytest
 python -m pytest
 ```
 Tes yang sama dijalankan otomatis oleh GitHub Actions setiap kali ada push.
+
+Versi `.exe` Windows dibuat otomatis oleh GitHub Actions (`.github/workflows/release.yml`) setiap kali tag versi baru di-push, misalnya `git tag v0.4.0` lalu `git push --tags`. Hasilnya muncul di halaman Releases.
 
 ## Penting
 Mengunduh dan memakai ulang konten orang lain bisa melanggar Ketentuan Layanan YouTube dan hak cipta kreatornya. Gunakan hanya untuk konten yang kamu punya haknya atau yang izin pemakaiannya jelas. Tanggung jawab pemakaian ada pada kamu.

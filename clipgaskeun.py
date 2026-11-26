@@ -14,7 +14,7 @@ import argparse, json, math, os, re, shutil, subprocess, sys, tempfile
 from contextlib import contextmanager
 from importlib.util import find_spec
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 # ───────────── tampilan terminal: pakai rich kalau ada, kalau tidak teks biasa ─────────────
 try:
@@ -132,13 +132,24 @@ def is_url(s):
     return re.match(r"^https?://", s, re.I) is not None
 
 
+FROZEN = getattr(sys, "frozen", False)  # True kalau dijalankan sebagai clipgaskeun.exe (PyInstaller)
+
+
 def find_ytdlp():
+    """yt-dlp yang terpasang di sistem didahulukan (paling mudah diperbarui), lalu yang ikut di dalam paket."""
     exe = shutil.which("yt-dlp")
     if exe:
         return [exe]
     if find_spec("yt_dlp"):
+        # di versi .exe, sys.executable = clipgaskeun.exe; `-m yt_dlp` ditangani oleh run_bundled_ytdlp()
         return [sys.executable, "-m", "yt_dlp"]
     return None
+
+
+def run_bundled_ytdlp(argv):
+    """Versi .exe: `clipgaskeun.exe -m yt_dlp ...` menjalankan yt-dlp yang ikut di dalam paket."""
+    import yt_dlp
+    return yt_dlp.main(argv)
 
 
 def probe(path):
@@ -213,19 +224,26 @@ INSTALL_HINT = {
     "faster-whisper": "pip install faster-whisper",
     "yt-dlp": "pip install yt-dlp  (atau winget install yt-dlp)",
     "rich": "pip install rich",
+    "deno": "dibutuhkan yt-dlp untuk YouTube. Windows: winget install DenoLand.Deno | macOS: brew install deno | lainnya: deno.land",
 }
 
 
 def check_deps():
     """Daftar (nama, wajib?, ada?, keterangan)."""
-    rows = [("Python 3.9+", True, sys.version_info >= (3, 9), sys.version.split()[0])]
+    if FROZEN:
+        rows = [("ClipGaskeun .exe", True, True, f"versi {__version__} (Python sudah termasuk)")]
+    else:
+        rows = [("Python 3.9+", True, sys.version_info >= (3, 9), sys.version.split()[0])]
     for tool in ("ffmpeg", "ffprobe"):
         p = shutil.which(tool)
         rows.append((tool, tool == "ffmpeg", bool(p), p or INSTALL_HINT[tool]))
     fw = find_spec("faster_whisper") is not None
     rows.append(("faster-whisper", False, fw, "untuk subtitle otomatis" if fw else INSTALL_HINT["faster-whisper"]))
     yt = find_ytdlp()
-    rows.append(("yt-dlp", False, bool(yt), "untuk link YouTube" if yt else INSTALL_HINT["yt-dlp"]))
+    yt_info = ("bawaan paket .exe" if yt and yt[0] == sys.executable else "untuk link YouTube") if yt else INSTALL_HINT["yt-dlp"]
+    rows.append(("yt-dlp", False, bool(yt), yt_info))
+    js = shutil.which("deno") or shutil.which("node")
+    rows.append(("deno / node", False, bool(js), "dipakai yt-dlp untuk YouTube" if js else INSTALL_HINT["deno"]))
     rows.append(("rich", False, _out is not None, "tampilan terminal" if _out else INSTALL_HINT["rich"]))
     return rows
 
@@ -932,5 +950,25 @@ def main(argv=None):
         print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
+def double_clicked():
+    """Versi .exe dibuka dengan klik dua kali (tanpa argumen): jelaskan cara pakai, cek kelengkapan, lalu tunggu
+    Enter supaya jendelanya tidak langsung tertutup."""
+    say(f"ClipGaskeun {__version__}", "bold")
+    say("Ini program terminal: jalankan lewat Command Prompt / PowerShell di folder ini, misalnya:\n"
+        "  clipgaskeun.exe video.mp4 --cut 1:05-1:40 --preset tiktok\n"
+        "  clipgaskeun.exe \"https://www.youtube.com/watch?v=ID\" --auto\n"
+        "Semua opsi: clipgaskeun.exe --help\n")
+    print_check()
+    try:
+        input("\nTekan Enter untuk menutup...")
+    except EOFError:
+        pass
+
+
 if __name__ == "__main__":
+    if FROZEN and sys.argv[1:3] == ["-m", "yt_dlp"]:
+        sys.exit(run_bundled_ytdlp(sys.argv[3:]))
+    if FROZEN and len(sys.argv) == 1:
+        double_clicked()
+        sys.exit(0)
     main()
