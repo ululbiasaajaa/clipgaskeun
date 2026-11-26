@@ -68,10 +68,13 @@ def test_build_ass_box_background():
 
 def test_parse_srt(tmp_path):
     p = tmp_path / "a.srt"
-    p.write_text("﻿1\r\n00:00:01,500 --> 00:00:02,000\r\nHalo\r\ndunia\r\n\r\n2\r\n00:00:03,000 --> 00:00:04,250\r\nlagi\r\n", encoding="utf-8")
-    lines = cg.parse_srt(str(p))
-    assert lines[0]["start"] == 1.5 and lines[0]["text"] == "Halo\ndunia"
-    assert lines[1]["end"] == 4.25
+    srt = "\ufeff1\r\n00:00:01,500 --> 00:00:02,000\r\nHalo\r\ndunia\r\n\r\n2\r\n00:00:03,000 --> 00:00:04,250\r\nlagi\r\n"
+    for raw in (srt, srt.replace("\r\n", "\r\r\n"), srt.replace("\r\n", "\n")):  # Windows, rusak, Unix
+        p.write_bytes(raw.encode("utf-8"))  # bytes: tanpa terjemahan baris baru otomatis dari OS
+        lines = cg.parse_srt(str(p))
+        assert len(lines) == 2
+        assert lines[0]["start"] == 1.5 and lines[0]["text"] == "Halo\ndunia"
+        assert lines[1]["end"] == 4.25
 
 
 def test_preset_and_override():

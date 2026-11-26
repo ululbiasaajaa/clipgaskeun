@@ -349,7 +349,8 @@ def group_lines(words, max_words=6, gap=0.7):
 
 def parse_srt(path):
     """File SRT -> baris [{start,end,text,words=None}]."""
-    raw = open(path, encoding="utf-8-sig", errors="replace").read().replace("\r\n", "\n")
+    # newline="" + normalisasi sendiri: file dari Windows kadang berisi \r\r\n yang membuat baris kosong palsu
+    raw = re.sub(r"\r*\n|\r", "\n", open(path, encoding="utf-8-sig", errors="replace", newline="").read())
     out = []
     tre = r"(\d+):(\d\d):(\d\d)[,.](\d{1,3})"
     for block in re.split(r"\n\s*\n", raw.strip()):
