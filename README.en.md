@@ -19,7 +19,8 @@ Cut long videos (streams, podcasts, etc.) into 9:16 Shorts with a blurred backgr
 ## Easiest (Windows): the .exe, no Python needed
 1. Install ffmpeg: open PowerShell and run `winget install ffmpeg` (for YouTube links also `winget install DenoLand.Deno`). Close and reopen the terminal.
 2. Download **`clipgaskeun-windows.zip`** from [Releases](https://github.com/ululbiasaajaa/clipgaskeun/releases/latest) and extract it.
-3. Open the extracted `clipgaskeun` folder, click File Explorer's address bar, type `cmd`, press Enter. A terminal opens in that folder.
+3. Open the extracted `clipgaskeun` folder. Click File Explorer's **address bar** (the one showing the folder path, not the Search box), press **Ctrl + A** to select the whole path, type `cmd`, press Enter. A terminal opens in that folder.
+   Alternatively open Command Prompt from the Start menu and run `cd /d C:\path\to\clipgaskeun`.
 4. Use the examples below with `clipgaskeun.exe` in front:
    ```
    clipgaskeun.exe D:\Videos\stream.mp4 --cut 1:05-1:40 --preset tiktok

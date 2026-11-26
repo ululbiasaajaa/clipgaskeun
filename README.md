@@ -17,7 +17,8 @@ Potong video panjang (stream, podcast, dll) jadi Shorts 9:16 dengan latar blur, 
 ## Paling gampang (Windows): versi .exe, tanpa Python
 1. Pasang ffmpeg: buka PowerShell, jalankan `winget install ffmpeg` (untuk link YouTube, tambah `winget install DenoLand.Deno`). Tutup lalu buka lagi terminalnya.
 2. Unduh **`clipgaskeun-windows.zip`** dari halaman [Releases](https://github.com/ululbiasaajaa/clipgaskeun/releases/latest), lalu ekstrak.
-3. Buka folder `clipgaskeun` hasil ekstrak, klik kolom alamat di File Explorer, ketik `cmd`, lalu Enter. Terminal terbuka di folder itu.
+3. Buka folder `clipgaskeun` hasil ekstrak. Klik **kolom alamat** File Explorer (yang berisi path folder, bukan kotak Search), tekan **Ctrl + A** supaya path-nya ter-blok, ketik `cmd`, lalu Enter. Terminal terbuka di folder itu.
+   Cara lain: buka Command Prompt dari menu Start, lalu `cd /d C:\lokasi\folder\clipgaskeun`.
 4. Pakai seperti contoh di bawah, dengan `clipgaskeun.exe` di depan:
    ```
    clipgaskeun.exe D:\Video\stream.mp4 --cut 1:05-1:40 --preset tiktok
