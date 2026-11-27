@@ -172,3 +172,98 @@ def test_no_bare_tool_names_in_commands():
     src = open(cg.__file__, encoding="utf-8").read()
     assert '["ffmpeg"' not in src and '["ffprobe"' not in src
     assert '"ffmpeg", "-' not in src
+
+
+# ───────────── webcam streamer: --cam / --layout ─────────────
+def test_parse_cam():
+    assert cg.parse_cam("1480,40,400,300") == (1480, 40, 400, 300)
+    assert cg.parse_cam(" 10 , 20 , 320 , 240 ") == (10, 20, 320, 240)
+    for bad in ["", "1,2,3", "a,b,c,d", "1,2,3,4,5", "0,0,4,4", "-1,0,100,100"]:
+        assert isinstance(cg.parse_cam(bad), str), bad
+
+
+def test_parse_layout_single_and_timeline():
+    assert cg.parse_layout("split", 10) == [(0.0, 10.0, "split")]
+    segs = cg.parse_layout("0-5:split,5-12:pip-kanan-atas,12-:wajah-penuh", 20)
+    assert [(round(a), round(b), n) for a, b, n in segs] == [(0, 5, "split"), (5, 12, "pip-kanan-atas"), (12, 20, "wajah-penuh")]
+    # waktu dalam menit:detik, dan rentang melewati akhir klip dipotong
+    segs = cg.parse_layout("0-0:30:game-penuh", 20)
+    assert isinstance(segs, (list, str))  # '0:30' di dalam rentang membingungkan -> tidak boleh crash
+
+
+def test_parse_layout_gaps_free_pip_and_errors():
+    segs = cg.parse_layout("2-4:game-penuh", 6)       # bagian yang tidak disebut = split
+    assert [n for _, _, n in segs] == ["split", "game-penuh", "split"]
+    segs = cg.parse_layout("0-3:pip@79,12,3-:pip-kiri-bawah", 6)
+    assert [n for _, _, n in segs] == ["pip@79,12", "pip-kiri-bawah"]
+    for bad in ["", "nope", "0-5:nope", "5-3:split", "0-5:split,3-8:game-penuh", "pip@120,5", "0-x:split"]:
+        assert isinstance(cg.parse_layout(bad, 10), str), bad
+
+
+def test_auto_focus_avoids_cam():
+    # video 1280x720, webcam di pojok kanan atas, panel 1080x960 (rasio 1.125) -> lebar jendela 810
+    f = cg.auto_focus((1280, 720), (940, 20, 320, 240), 1080 / 960)
+    ww = 720 * 1080 / 960
+    x0 = f / 100 * (1280 - ww)
+    assert x0 + ww <= 940 + 1e-6            # jendela game berhenti sebelum webcam
+    # webcam di tengah-bawah tidak bisa dihindari -> kembali ke tengah
+    assert cg.auto_focus((1280, 720), (400, 500, 480, 200), 1080 / 960) == 50.0
+    # sumber sudah sempit (vertikal) -> tidak ada yang dipotong
+    assert cg.auto_focus((720, 1280), (0, 0, 200, 200), 1080 / 1920) == 50.0
+
+
+def test_layout_chain_structure():
+    segs = [(0.0, 3.0, "split"), (3.0, 6.0, "pip-kanan-atas"), (6.0, 8.0, "wajah-penuh"), (8.0, 10.0, "game-penuh")]
+    fc = cg.build_layout_chain(segs, (940, 20, 320, 240), None, size=(1280, 720))
+    assert "concat=n=4:v=1:a=0[c]" in fc and fc.count("setsar=1") == 4
+    assert "crop=320:240:940:20" in fc
+    one = cg.build_layout_chain([(0.0, 5.0, "split")], (940, 20, 320, 240), 50, size=(1280, 720))
+    assert one.endswith("[c]") and "concat" not in one
+
+
+def test_layout_requires_cam():
+    import pytest
+    with pytest.raises(SystemExit):
+        cg.main(["v.mp4", "--cut", "1-5", "--layout", "split"])
+    with pytest.raises(SystemExit):
+        cg.main(["v.mp4", "--cut", "1-5", "--cam", "1,2,3"])
+    with pytest.raises(SystemExit):
+        cg.main(["v.mp4", "--cut", "1-5", "--cam", "10,10,100,100", "--layout", "0-5:nope"])
+
+
+def _make_stream(tmp_path):
+    """Video sumber 1280x720: latar warna-warni + 'webcam' (batang warna) di pojok kanan atas, ada suara."""
+    import subprocess
+    ff = cg.which_safe("ffmpeg")
+    out = tmp_path / "stream.mp4"
+    subprocess.run([ff, "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30:duration=8",
+                    "-f", "lavfi", "-i", "smptebars=size=320x240:rate=30:duration=8", "-f", "lavfi", "-i",
+                    "sine=frequency=440:duration=8", "-filter_complex", "[0:v][1:v]overlay=940:20[v]", "-map", "[v]",
+                    "-map", "2:a", "-shortest", "-c:v", "libx264", "-c:a", "aac", str(out)], check=True)
+    return out
+
+
+def test_render_with_layout_changes(tmp_path):
+    import pytest
+    if not cg.which_safe("ffmpeg") or not cg.which_safe("ffprobe"):
+        pytest.skip("butuh ffmpeg + ffprobe")
+    src = _make_stream(tmp_path)
+    out = tmp_path / "hasil.mp4"
+    cg.main([str(src), "--cut", "1-7", "--cam", "940,20,320,240", "--no-subs", "-o", str(out),
+             "--layout", "0-2:split,2-4:pip-kanan-atas,4-:wajah-penuh"])
+    assert out.is_file()
+    assert cg.video_size(str(out)) == (1080, 1920)
+    dur, has_audio = cg.probe(str(out))
+    assert abs(dur - 6) < 0.3 and has_audio     # panjang & suara tetap utuh walau tata letak berganti
+
+
+def test_cam_preview_makes_images(tmp_path):
+    import pytest
+    if not cg.which_safe("ffmpeg") or not cg.which_safe("ffprobe"):
+        pytest.skip("butuh ffmpeg + ffprobe")
+    src = _make_stream(tmp_path)
+    cg.main([str(src), "--cam", "940,20,320,240", "--cam-preview", "--cam-waktu", "2"])
+    assert (tmp_path / "stream_cam.png").is_file() and (tmp_path / "stream_layout.png").is_file()
+    import pytest as _p
+    with _p.raises(SystemExit):   # kotak di luar video ditolak
+        cg.main([str(src), "--cam", "1200,600,320,240", "--cam-preview"])

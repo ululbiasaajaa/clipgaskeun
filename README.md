@@ -118,6 +118,35 @@ Ini perkiraan, bukan jaminan: skor tinggi berarti "layak dicek dulu". Tonton cup
 | `--auto-model` | Model Whisper untuk menilai kandidat (default `base`, cepat). Subtitle hasil akhir tetap memakai `--model`. |
 | `--json` | Keluaran JSON (daftar kandidat dan file hasil), untuk skrip atau coding agent seperti Claude Code. |
 
+### Video stream dengan webcam: tata letak wajah (`--cam`, `--layout`)
+Kalau videonya stream yang ada kotak webcam-nya di satu pojok, ClipGaskeun bisa memisahkan wajah dan game, lalu menatanya ke layar vertikal. Ada dua langkah.
+
+**1. Cari letak kotak webcam** (cukup sekali per streamer). Tulis perkiraan `x,y,lebar,tinggi` dalam piksel, lalu minta gambar pratinjau:
+```
+clipgaskeun stream.mp4 --cam 1480,40,400,300 --cam-preview --cam-waktu 1:30
+```
+Hasilnya dua gambar di sebelah videomu: `stream_cam.png` (kotak merah di bingkai video, geser angkanya kalau meleset) dan `stream_layout.png` (semua tata letak berdampingan, supaya kamu bisa memilih).
+
+**2. Render dengan tata letak:**
+```
+clipgaskeun stream.mp4 --cut 1:05-1:40 --cam 1480,40,400,300 --layout split --sub-pos tengah
+clipgaskeun stream.mp4 --cut 1:05-1:40 --cam 1480,40,400,300 --layout "0-5:split,5-12:pip-kanan-atas,12-:wajah-penuh"
+```
+
+| Tata letak | Tampilan |
+|---|---|
+| `split` (default) | Wajah di atas, game di bawah (masing-masing setengah layar). |
+| `pip-kanan-atas`, `pip-kiri-atas`, `pip-kanan-bawah`, `pip-kiri-bawah` | Game memenuhi layar, wajah jadi kotak kecil berbingkai putih di pojok itu. |
+| `pip@X,Y` | Seperti di atas, tetapi posisinya bebas dalam persen, mis. `pip@79,12` (kanan atas). |
+| `wajah-penuh` | Wajah di tengah layar dengan latar blur. |
+| `game-penuh` | Game saja memenuhi layar, tanpa wajah. |
+
+- Tata letak bisa **berganti sesuai waktu**: `0-5:split,5-12:pip-kanan-atas,12-:wajah-penuh`. Waktunya relatif ke **awal hasil** (sama seperti `--srt`), bukan ke video asli. Bagian yang tidak disebut memakai `split`. Rentang tidak boleh tumpang tindih.
+- Saat game dipotong jadi vertikal, bagian yang dipertahankan dipilih otomatis: dekat tengah, tetapi menjauhi kotak webcam supaya wajah tidak ikut muncul di panel game. Mau menentukan sendiri: `--game-fokus 0` (kiri) sampai `100` (kanan).
+- Tidak ada deteksi wajah otomatis dan tidak ada geser pakai mouse. Letak webcam kamu tentukan lewat `--cam`, dan `--cam-preview` membantu memastikan angkanya pas.
+- Kualitas `wajah-penuh` dibatasi resolusi webcam di streamnya. Kalau kotaknya kecil (mis. 300 px), wajahnya akan terlihat lebih buram saat diperbesar.
+- Subtitle tetap bisa diatur seperti biasa. `--sub-pos tengah` menaruhnya di sambungan wajah dan game pada tata letak `split`.
+
 ### Di mana hasilnya, dan apakah tertimpa?
 - Mau lokasi atau nama lain: pakai `-o`, misalnya `-o D:\Shorts\klip1.mp4`. Folder yang belum ada dibuat otomatis.
 - Kalau nama otomatis sudah dipakai, hasil baru diberi nomor (`_short_2.mp4`, `_short_3.mp4`, ...), jadi **klip sebelumnya tidak tertimpa**. Kalau kamu memakai `-o` dengan nama yang sudah ada, file itu akan ditimpa.
@@ -153,6 +182,10 @@ Tanpa `--preset`: subtitle putih bergaris tepi hitam di bawah video. Opsi yang k
 | `--highlight` | Warna kata yang menyala di gaya karaoke (default `kuning`). |
 | `--sub-bg` | `kotak` untuk kotak gelap di belakang subtitle, `tidak` (default) untuk garis tepi. |
 | `--font`, `--font-size` | Font dan ukuran subtitle (default Poppins, 10; ukuran `4`–`40`). Kalau font tidak terpasang, ffmpeg memakai font bawaan. |
+| `--cam x,y,w,h` | Letak kotak webcam di video stream (piksel). Mengaktifkan tata letak wajah (lihat di atas). |
+| `--layout` | `split`, `pip-kanan-atas`, `wajah-penuh`, `game-penuh`, ... atau berganti per waktu. Butuh `--cam`. |
+| `--game-fokus` | Bagian game yang dipertahankan: `0` kiri sampai `100` kanan. Default otomatis. |
+| `--cam-preview`, `--cam-waktu` | Simpan gambar pratinjau kotak webcam dan semua tata letak, lalu keluar. |
 | `--logo file.png` | Watermark PNG di pojok kiri atas. |
 | `--logo-scale` | Ukuran logo, `0.05`–`3` (default `0.62`). |
 | `--cek` | Periksa ffmpeg, faster-whisper, yt-dlp, dll. |

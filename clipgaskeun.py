@@ -14,7 +14,7 @@ import argparse, json, math, os, re, shutil, subprocess, sys, tempfile
 from contextlib import contextmanager
 from importlib.util import find_spec
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"
 
 # ───────────── tampilan terminal: pakai rich kalau ada, kalau tidak teks biasa ─────────────
 try:
@@ -763,6 +763,13 @@ def build_parser():
     g.add_argument("--sub-bg", choices=["tidak", "kotak"], default=None, help="kotak gelap di belakang subtitle")
     g.add_argument("--font", default=None, help="nama font subtitle (default Poppins)")
     g.add_argument("--font-size", type=ranged(int, 4, 40), default=None, help="ukuran subtitle 4-40 (default 10)")
+    gc = ap.add_argument_group("webcam streamer (opsional, untuk video stream yang ada kotak webcam-nya)")
+    gc.add_argument("--cam", help="letak kotak webcam di video sumber: x,y,lebar,tinggi dalam piksel, mis. 1480,40,400,300. Cari angkanya dengan --cam-preview")
+    gc.add_argument("--layout", default=None, help="tata letak: split (wajah atas, game bawah), pip-kanan-atas / pip-kiri-atas / pip-kanan-bawah / pip-kiri-bawah / pip@X,Y (wajah kecil, X,Y persen), wajah-penuh, game-penuh. "
+                    "Bisa berganti per waktu (relatif awal hasil): \"0-5:split,5-12:pip-kanan-atas,12-:wajah-penuh\". Default: split")
+    gc.add_argument("--game-fokus", type=ranged(float, 0, 100), default=None, help="bagian game yang dipertahankan saat dipotong jadi vertikal: 0 = kiri, 50 = tengah, 100 = kanan. Default: otomatis, dekat tengah tetapi menjauhi kotak webcam")
+    gc.add_argument("--cam-preview", action="store_true", help="simpan gambar kotak --cam di salah satu bingkai + gambar semua tata letak, lalu keluar (tanpa merender)")
+    gc.add_argument("--cam-waktu", default="0:10", help="bingkai ke berapa yang dipakai --cam-preview (default 0:10)")
     ap.add_argument("--logo", help="PNG watermark (pojok kiri atas)")
     ap.add_argument("--logo-scale", type=ranged(float, 0.05, 3.0), default=None, help="ukuran logo 0.05-3 (default 0.62)")
     ap.add_argument("--keep-tmp", action="store_true", help="jangan hapus folder kerja sementara")
@@ -773,6 +780,188 @@ def build_parser():
 
 def default_out(a, url_mode, suffix="short"):
     return f"clipgaskeun_{suffix}.mp4" if url_mode else os.path.splitext(a.input)[0] + f"_{suffix}.mp4"
+
+
+# ───────────── tata letak webcam streamer (--cam / --layout) ─────────────
+OUT_W, OUT_H = 1080, 1920
+LAYOUTS = ("split", "wajah-penuh", "game-penuh", "pip-kanan-atas", "pip-kiri-atas", "pip-kanan-bawah", "pip-kiri-bawah")
+DEFAULT_LAYOUT = "split"
+PIP_W = 390        # lebar kotak wajah kecil (piksel, dari lebar 1080)
+PIP_BORDER = 4     # bingkai putih di sekeliling kotak wajah
+PIP_SIDE, PIP_TOP, PIP_BOTTOM = 40, 300, 200   # jarak dari tepi layar (atas: di bawah logo, bawah: di bawah subtitle)
+
+
+def parse_cam(s):
+    """'1480,40,400,300' -> (x, y, lebar, tinggi) atau pesan error (str)."""
+    m = re.fullmatch(r"\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*", s or "")
+    if not m:
+        return f"--cam harus berformat x,y,lebar,tinggi dalam piksel, mis. 1480,40,400,300 (kamu isi {s!r}). Cara mencarinya: --cam-preview"
+    x, y, w, h = (int(g) for g in m.groups())
+    if w < 16 or h < 16:
+        return "Kotak webcam terlalu kecil (minimal 16x16 piksel)."
+    return x, y, w, h
+
+
+def layout_pos(name):
+    """'pip@79,12' -> (79.0, 12.0) persen; selain itu None."""
+    m = re.fullmatch(r"pip@(\d+(?:\.\d+)?),(\d+(?:\.\d+)?)", name)
+    return (float(m[1]), float(m[2])) if m else None
+
+
+def parse_layout(spec, total):
+    """'0-5:split,5-12:pip-kanan-atas,12-:wajah-penuh' -> [(mulai, selesai, nama)] yang menutup 0..total.
+    Waktu relatif terhadap awal hasil. Tanpa waktu = untuk seluruh klip. Bagian yang tidak disebut = split.
+    Salah -> pesan error (str)."""
+    segs, pos, spec = [], 0, (spec or "").strip()
+    tok = re.compile(r"\s*(?:([\d:.]*)-([\d:.]*):)?\s*(pip@\d+(?:\.\d+)?\s*,\s*\d+(?:\.\d+)?|[a-z][a-z-]*)\s*(?:,|$)")
+    while pos < len(spec):
+        m = tok.match(spec, pos)
+        if not m or m.end() == pos:
+            return f"--layout tidak bisa dibaca di dekat {spec[pos:pos + 20]!r}. Contoh: split  atau  0-5:split,5-12:pip-kanan-atas,12-:wajah-penuh"
+        a_s, b_s, name = m.group(1), m.group(2), re.sub(r"\s+", "", m.group(3))
+        a = 0.0 if not a_s else ts(a_s)
+        b = float(total) if not b_s else ts(b_s)
+        if a is None or b is None:
+            return f"Waktu salah di --layout: {m.group(0).strip(' ,')!r}"
+        if layout_pos(name) is None and name not in LAYOUTS:
+            return f"Tata letak tidak dikenal: {name!r}. Pilihan: {', '.join(LAYOUTS)}, atau pip@X,Y (persen, mis. pip@79,12)"
+        pos_ = layout_pos(name)
+        if pos_ and not (0 <= pos_[0] <= 100 and 0 <= pos_[1] <= 100):
+            return f"Posisi {name!r} harus 0-100 persen."
+        segs.append((a, min(b, float(total)), name))
+        pos = m.end()
+    if not segs:
+        return "--layout kosong."
+    segs.sort(key=lambda s: s[0])
+    out, t = [], 0.0
+    for a, b, name in segs:
+        if b <= a:
+            return f"Rentang waktu di --layout harus selesai sesudah mulai ({name})."
+        if a < t - 1e-6:
+            return "Rentang waktu di --layout saling tumpang tindih."
+        if a >= total:
+            continue
+        if a > t + 1e-6:
+            out.append((t, a, DEFAULT_LAYOUT))
+        out.append((a, b, name))
+        t = b
+    if t < total - 1e-6:
+        out.append((t, float(total), DEFAULT_LAYOUT))
+    # rapatkan ke batas frame 30 fps supaya potongan antar tata letak tidak bergeser
+    snapped = [(round(a * 30) / 30, round(b * 30) / 30, n) for a, b, n in out]
+    return [s for s in snapped if s[1] - s[0] > 0.02]
+
+
+def video_size(path):
+    """(lebar, tinggi) video lewat ffprobe, atau None."""
+    ffprobe = which_safe("ffprobe")
+    if not ffprobe:
+        return None
+    r = subprocess.run([ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+                        "-of", "csv=p=0", path], capture_output=True, text=True)
+    m = re.match(r"(\d+),(\d+)", r.stdout.strip())
+    return (int(m[1]), int(m[2])) if m else None
+
+
+def auto_focus(size, cam, aspect):
+    """Pilih bagian game (0-100, kiri..kanan) yang paling dekat ke tengah tetapi TIDAK memuat kotak webcam.
+    Kalau tidak mungkin (webcam terlalu besar / video sudah sempit), kembali ke tengah (50)."""
+    iw, ih = size
+    ww = ih * aspect
+    if ww >= iw:
+        return 50.0
+    c = (iw - ww) / 2
+    cx, cw = cam[0], cam[2]
+    cands, gap = [], 3  # gap: sisakan beberapa piksel supaya pembulatan tidak membawa tepi webcam masuk
+    if cx - ww - gap >= 0:
+        cands.append(min(c, cx - ww - gap))
+    if cx + cw + gap <= iw - ww:
+        cands.append(max(c, cx + cw + gap))
+    if not cands:
+        return 50.0
+    x0 = min(cands, key=lambda v: abs(v - c))
+    return round(100 * x0 / (iw - ww), 2)
+
+
+def layout_graph(name, src, dst, cam, focus, tag, size=None):
+    """Satu tata letak -> potongan filtergraph ffmpeg: [src] (video sumber) -> [dst] (1080x1920).
+    focus: 0-100 (kiri..kanan) atau None = otomatis (menjauhi kotak webcam, perlu size = ukuran video sumber)."""
+    cx, cy, cw, ch = cam
+    t = f"_{tag}"
+    crop_cam = f"crop={cw}:{ch}:{cx}:{cy}"
+
+    def game(w, h):  # penuhi w x h dari video sumber; f = bagian kiri..kanan yang dipertahankan
+        f = focus if focus is not None else (auto_focus(size, cam, w / h) if size else 50.0)
+        return (f"scale={w}:{h}:force_original_aspect_ratio=increase,"
+                f"crop={w}:{h}:x='(iw-ow)*{f / 100:.4f}':y='(ih-oh)/2'")
+    if name == "game-penuh":
+        return f"[{src}]{game(OUT_W, OUT_H)},setsar=1[{dst}]"
+    if name == "split":
+        half = OUT_H // 2
+        return (f"[{src}]split=2[g{t}][f{t}];"
+                f"[f{t}]{crop_cam},scale={OUT_W}:{half}:force_original_aspect_ratio=increase,crop={OUT_W}:{half}[top{t}];"
+                f"[g{t}]{game(OUT_W, half)}[bot{t}];[top{t}][bot{t}]vstack,setsar=1[{dst}]")
+    if name == "wajah-penuh":
+        return (f"[{src}]{crop_cam},split=2[a{t}][b{t}];"
+                f"[a{t}]scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=increase,crop={OUT_W}:{OUT_H},"
+                f"boxblur=15:2,eq=brightness=-0.08[bg{t}];"
+                f"[b{t}]scale={OUT_W}:-2[fg{t}];[bg{t}][fg{t}]overlay=0:(H-h)/2,setsar=1[{dst}]")
+    # pip-*: game memenuhi layar, wajah jadi kotak kecil bersingkap putih
+    pw = PIP_W
+    ph = round(pw * ch / cw) // 2 * 2
+    bw, bh = pw + 2 * PIP_BORDER, ph + 2 * PIP_BORDER
+    free = layout_pos(name)
+    if free:
+        x, y = round((OUT_W - bw) * free[0] / 100), round((OUT_H - bh) * free[1] / 100)
+    else:
+        x = PIP_SIDE if "kiri" in name else OUT_W - bw - PIP_SIDE
+        y = PIP_TOP if "atas" in name else OUT_H - bh - PIP_BOTTOM
+    return (f"[{src}]split=2[g{t}][f{t}];[g{t}]{game(OUT_W, OUT_H)}[bg{t}];"
+            f"[f{t}]{crop_cam},scale={pw}:{ph},pad={bw}:{bh}:{PIP_BORDER}:{PIP_BORDER}:color=white[pip{t}];"
+            f"[bg{t}][pip{t}]overlay={x}:{y},setsar=1[{dst}]")
+
+
+def build_layout_chain(segments, cam, focus, src="0:v", dst="c", size=None):
+    """[(mulai, selesai, nama)] -> filtergraph yang menghasilkan [dst] 1080x1920, tata letak berganti sesuai waktu."""
+    n = len(segments)
+    if n == 1:
+        return layout_graph(segments[0][2], src, dst, cam, focus, 0, size)
+    parts = [f"[{src}]split={n}" + "".join(f"[s{i}]" for i in range(n))]
+    for i, (a, b, name) in enumerate(segments):
+        parts.append(f"[s{i}]trim=start={a:.4f}:end={b:.4f},setpts=PTS-STARTPTS[t{i}]")
+        parts.append(layout_graph(name, f"t{i}", f"l{i}", cam, focus, i, size))
+    parts.append("".join(f"[l{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[{dst}]")
+    return ";".join(parts)
+
+
+def cam_preview(a):
+    """--cam-preview: simpan gambar bingkai video dengan kotak webcam (merah) + gambar semua tata letak berdampingan."""
+    cam = parse_cam(a.cam)
+    if isinstance(cam, str):
+        die(cam)
+    if not a.input or is_url(a.input) or not os.path.isfile(a.input):
+        die("--cam-preview butuh file video di komputer (bukan link). Contoh: clipgaskeun stream.mp4 --cam 1480,40,400,300 --cam-preview")
+    at = ts(a.cam_waktu)
+    if at is None:
+        die(f"Waktu --cam-waktu salah: {a.cam_waktu!r}. Contoh: 1:30")
+    size = video_size(a.input)
+    if size and (cam[0] + cam[2] > size[0] or cam[1] + cam[3] > size[1]):
+        die(f"Kotak webcam keluar dari video (video {size[0]}x{size[1]}, kotak {cam[0]},{cam[1]} + {cam[2]}x{cam[3]}).")
+    base = os.path.splitext(a.input)[0]
+    box_png, sheet_png = unique_path(base + "_cam.png"), unique_path(base + "_layout.png")
+    ff = tool("ffmpeg")
+    run([ff, "-y", "-v", "error", "-ss", f"{at:.3f}", "-i", a.input, "-frames:v", "1", "-vf",
+         f"drawbox=x={cam[0]}:y={cam[1]}:w={cam[2]}:h={cam[3]}:color=red:t=6,scale=1280:-2", box_png])
+    n = len(LAYOUTS)
+    fc = f"[0:v]split={n}" + "".join(f"[p{i}]" for i in range(n)) + ";"
+    for i, name in enumerate(LAYOUTS):
+        fc += layout_graph(name, f"p{i}", f"o{i}", cam, a.game_fokus, i, size) + f";[o{i}]scale=270:480[z{i}];"
+    fc += "".join(f"[z{i}]" for i in range(n)) + f"hstack={n}[out]"
+    run([ff, "-y", "-v", "error", "-ss", f"{at:.3f}", "-i", a.input, "-frames:v", "1", "-filter_complex", fc,
+         "-map", "[out]", sheet_png])
+    say(f"Gambar kotak webcam (merah): {box_png}", "bold green")
+    say(f"Gambar semua tata letak ({', '.join(LAYOUTS)}): {sheet_png}", "bold green")
+    say("Kalau kotak merahnya meleset, ubah angka --cam lalu jalankan lagi.")
 
 
 def render_clip(a, cfg, url_mode, ytdlp, cuts, labels, out):
@@ -860,8 +1049,19 @@ def render_clip(a, cfg, url_mode, ytdlp, cuts, labels, out):
 
         # 3) komposisi 9:16: latar blur + video di tengah + subtitle + logo
         step(3, "render 9:16 ...")
-        chain = ("[0:v]split=2[a][b];[a]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,"
-                 "boxblur=15:2,scale=1080:1920,eq=brightness=-0.08[bg];[b]scale=1080:-2[fg];[bg][fg]overlay=0:(H-h)/2-120[c]")
+        if a.cam:
+            cam = parse_cam(a.cam)
+            size = video_size(raw)
+            if size and (cam[0] + cam[2] > size[0] or cam[1] + cam[3] > size[1]):
+                die(f"Kotak webcam keluar dari video (video {size[0]}x{size[1]}, kotak {cam[0]},{cam[1]} + {cam[2]}x{cam[3]}). Cek --cam dengan --cam-preview.")
+            segs_l = parse_layout(a.layout or DEFAULT_LAYOUT, total)
+            if isinstance(segs_l, str):
+                die(segs_l)
+            note("tata letak: " + ", ".join(f"{b - x:.1f}s {n}" for x, b, n in segs_l))
+            chain = build_layout_chain(segs_l, cam, a.game_fokus, size=size)
+        else:
+            chain = ("[0:v]split=2[a][b];[a]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,"
+                     "boxblur=15:2,scale=1080:1920,eq=brightness=-0.08[bg];[b]scale=1080:-2[fg];[bg][fg]overlay=0:(H-h)/2-120[c]")
         last = "c"
         if lines:
             open(os.path.join(tmp, "subs.ass"), "w", encoding="utf-8").write(build_ass(lines, cfg))
@@ -890,6 +1090,21 @@ def main(argv=None):
         set_json_mode()
     if a.cek:
         sys.exit(print_check())
+    if a.cam_preview:
+        if not a.cam:
+            ap.error("--cam-preview butuh --cam x,y,lebar,tinggi")
+        cam_preview(a)
+        return
+    if a.layout and not a.cam:
+        ap.error("--layout butuh --cam (letak kotak webcam di video sumber). Cari angkanya dengan --cam-preview")
+    if a.cam:
+        c = parse_cam(a.cam)
+        if isinstance(c, str):
+            ap.error(c)
+        if a.layout:
+            c = parse_layout(a.layout, 36000)
+            if isinstance(c, str):
+                ap.error(c)
     if not a.input or not (a.cut or a.auto):
         ap.error("butuh video/link dan --cut (atau --auto). Contoh: clipgaskeun video.mp4 --cut 1:05-1:40  (cek kelengkapan: clipgaskeun --cek)")
     if a.cut and a.auto:

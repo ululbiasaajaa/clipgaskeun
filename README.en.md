@@ -120,6 +120,35 @@ These are estimates, not guarantees: a high score means "worth checking first". 
 | `--auto-model` | Whisper model used to score candidates (default `base`, fast). Final subtitles still use `--model`. |
 | `--json` | JSON output (candidates and output files) for scripts or coding agents such as Claude Code. |
 
+### Streams with a webcam: face layouts (`--cam`, `--layout`)
+If the video is a stream with a webcam box in one corner, ClipGaskeun can separate the face from the game and arrange both on the vertical screen. Two steps.
+
+**1. Find the webcam box** (once per streamer). Write a rough `x,y,width,height` in pixels and ask for a preview:
+```
+clipgaskeun stream.mp4 --cam 1480,40,400,300 --cam-preview --cam-waktu 1:30
+```
+You get two images next to your video: `stream_cam.png` (a red box on a frame, adjust the numbers if it's off) and `stream_layout.png` (all layouts side by side, to pick from).
+
+**2. Render with a layout:**
+```
+clipgaskeun stream.mp4 --cut 1:05-1:40 --cam 1480,40,400,300 --layout split --sub-pos tengah
+clipgaskeun stream.mp4 --cut 1:05-1:40 --cam 1480,40,400,300 --layout "0-5:split,5-12:pip-kanan-atas,12-:wajah-penuh"
+```
+
+| Layout | Look |
+|---|---|
+| `split` (default) | Face on top, game below (half the screen each). |
+| `pip-kanan-atas`, `pip-kiri-atas`, `pip-kanan-bawah`, `pip-kiri-bawah` | Game fills the screen, the face becomes a small white-bordered box in that corner (top-right, top-left, bottom-right, bottom-left). |
+| `pip@X,Y` | Same, but free position in percent, e.g. `pip@79,12` (top right). |
+| `wajah-penuh` | Face in the middle on a blurred background. |
+| `game-penuh` | Game only, filling the screen, no face. |
+
+- Layouts can **change over time**: `0-5:split,5-12:pip-kanan-atas,12-:wajah-penuh`. Times are relative to the **start of the result** (like `--srt`), not the original video. Parts you don't mention use `split`. Ranges must not overlap.
+- When the game is cropped to vertical, the kept part is picked automatically: near the centre but away from the webcam box, so the face doesn't also show up in the game panel. To set it yourself: `--game-fokus 0` (left) to `100` (right).
+- No automatic face detection and no mouse dragging. You give the webcam position with `--cam`, and `--cam-preview` helps you get the numbers right.
+- `wajah-penuh` quality is limited by the stream's webcam resolution. A small box (e.g. 300 px) looks softer when enlarged.
+- Subtitles work as usual. `--sub-pos tengah` (middle) puts them at the seam between face and game in `split`.
+
 ### Where is the result, and will it be overwritten?
 - Different name or folder: use `-o`, e.g. `-o D:\Shorts\clip1.mp4`. Missing folders are created.
 - If the automatic name is taken, a number is added (`_short_2.mp4`, `_short_3.mp4`, ...), so **earlier clips are never overwritten**. With `-o` and an existing name, that file is overwritten.
@@ -155,6 +184,10 @@ Without `--preset`: white subtitles with a black outline below the video. Option
 | `--highlight` | Colour of the lit-up word in karaoke style (default `kuning`, yellow). |
 | `--sub-bg` | `kotak` for a dark box behind the subtitles, `tidak` (none, default) for an outline. |
 | `--font`, `--font-size` | Subtitle font and size (default Poppins, 10; size `4`–`40`). If the font isn't installed, ffmpeg falls back to a default font. |
+| `--cam x,y,w,h` | Where the webcam box is in the stream video (pixels). Enables the face layouts (see above). |
+| `--layout` | `split`, `pip-kanan-atas`, `wajah-penuh`, `game-penuh`, ... or changing over time. Needs `--cam`. |
+| `--game-fokus` | Which part of the game is kept: `0` left to `100` right. Default: automatic. |
+| `--cam-preview`, `--cam-waktu` | Save a preview image of the webcam box and all layouts, then exit. |
 | `--logo file.png` | PNG watermark in the top-left corner. |
 | `--logo-scale` | Logo size, `0.05`–`3` (default `0.62`). |
 | `--cek` | ("check") Check ffmpeg, faster-whisper, yt-dlp, etc. |
