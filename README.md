@@ -17,6 +17,7 @@ Potong video panjang (stream, podcast, dll) jadi Shorts 9:16 dengan latar blur, 
 ## Paling gampang (Windows): versi .exe, tanpa Python
 1. Pasang ffmpeg: buka PowerShell, jalankan `winget install ffmpeg` (untuk link YouTube, tambah `winget install DenoLand.Deno`). Tutup lalu buka lagi terminalnya.
 2. Unduh **`clipgaskeun-windows.zip`** dari halaman [Releases](https://github.com/ululbiasaajaa/clipgaskeun/releases/latest), lalu ekstrak.
+   (Mau memastikan filenya asli? Catatan rilis memuat **SHA256**-nya. Cocokkan dengan `Get-FileHash clipgaskeun-windows.zip -Algorithm SHA256` di PowerShell. Dengan GitHub CLI: `gh attestation verify clipgaskeun-windows.zip --repo ululbiasaajaa/clipgaskeun`.)
 3. Buka folder `clipgaskeun` hasil ekstrak. Klik **kolom alamat** File Explorer (yang berisi path folder, bukan kotak Search), tekan **Ctrl + A** supaya path-nya ter-blok, ketik `cmd`, lalu Enter. Terminal terbuka di folder itu.
    Cara lain: buka Command Prompt dari menu Start, lalu `cd /d C:\lokasi\folder\clipgaskeun`.
 4. Pakai seperti contoh di bawah, dengan `clipgaskeun.exe` di depan:
@@ -188,7 +189,8 @@ python -m pytest
 ```
 Tes yang sama dijalankan otomatis oleh GitHub Actions setiap kali ada push.
 
-Versi `.exe` Windows dibuat otomatis oleh GitHub Actions (`.github/workflows/release.yml`) setiap kali tag versi baru di-push, misalnya `git tag v0.4.0` lalu `git push --tags`. Hasilnya muncul di halaman Releases.
+Versi `.exe` Windows dibuat otomatis oleh GitHub Actions (`.github/workflows/release.yml`) setiap kali tag versi baru di-push, misalnya `git tag v0.4.1` lalu `git push origin v0.4.1`. Hasilnya muncul di halaman Releases, lengkap dengan SHA256 dan bukti asal-usul (attestation).
+Supaya rilisnya tidak bisa disusupi lewat pihak ketiga, setiap action dikunci ke commit-nya (SHA) dan pustaka build dipasang dari `requirements-build.txt` (versi persis + hash). Perbarui daftar itu dengan sadar sebelum rilis, bukan otomatis.
 
 ## Penting
 Mengunduh dan memakai ulang konten orang lain bisa melanggar Ketentuan Layanan YouTube dan hak cipta kreatornya. Gunakan hanya untuk konten yang kamu punya haknya atau yang izin pemakaiannya jelas. Tanggung jawab pemakaian ada pada kamu.

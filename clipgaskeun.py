@@ -14,7 +14,7 @@ import argparse, json, math, os, re, shutil, subprocess, sys, tempfile
 from contextlib import contextmanager
 from importlib.util import find_spec
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 # ───────────── tampilan terminal: pakai rich kalau ada, kalau tidak teks biasa ─────────────
 try:
@@ -135,9 +135,37 @@ def is_url(s):
 FROZEN = getattr(sys, "frozen", False)  # True kalau dijalankan sebagai clipgaskeun.exe (PyInstaller)
 
 
+def which_safe(name):
+    """Cari program di PATH dan kembalikan path LENGKAP-nya (atau None).
+    Folder kerja dan entri PATH yang relatif sengaja dilewati: di Windows, file bernama ffmpeg.exe yang kebetulan
+    ada di folder tempat terminal dibuka bisa ikut dijalankan kalau kita memanggil program hanya dengan namanya."""
+    exts = [""]
+    if os.name == "nt":
+        pathext = [e.lower() for e in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";") if e]
+        if os.path.splitext(name)[1].lower() not in pathext:
+            exts = pathext
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        d = d.strip().strip('"')
+        if not d or not os.path.isabs(d):
+            continue
+        for e in exts:
+            cand = os.path.join(d, name + e)
+            if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                return cand
+    return None
+
+
+def tool(name):
+    """Path lengkap ke ffmpeg/ffprobe (dipakai di setiap pemanggilan, bukan sekadar nama)."""
+    p = which_safe(name)
+    if not p:
+        die(f"{name} tidak ditemukan di PATH. Jalankan `clipgaskeun --cek` untuk cara memasangnya.")
+    return p
+
+
 def find_ytdlp():
     """yt-dlp yang terpasang di sistem didahulukan (paling mudah diperbarui), lalu yang ikut di dalam paket."""
-    exe = shutil.which("yt-dlp")
+    exe = which_safe("yt-dlp")
     if exe:
         return [exe]
     if find_spec("yt_dlp"):
@@ -154,9 +182,10 @@ def run_bundled_ytdlp(argv):
 
 def probe(path):
     """(durasi detik atau None, punya audio?) lewat ffprobe. Tanpa ffprobe: (None, True)."""
-    if not shutil.which("ffprobe"):
+    ffprobe = which_safe("ffprobe")
+    if not ffprobe:
         return None, True
-    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type",
+    r = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration:stream=codec_type",
                         "-of", "json", path], capture_output=True, text=True)
     try:
         info = json.loads(r.stdout or "{}")
@@ -234,15 +263,15 @@ def check_deps():
         rows = [("ClipGaskeun .exe", True, True, f"versi {__version__} (Python sudah termasuk)")]
     else:
         rows = [("Python 3.10+", True, sys.version_info >= (3, 10), sys.version.split()[0])]
-    for tool in ("ffmpeg", "ffprobe"):
-        p = shutil.which(tool)
-        rows.append((tool, tool == "ffmpeg", bool(p), p or INSTALL_HINT[tool]))
+    for name in ("ffmpeg", "ffprobe"):
+        p = which_safe(name)
+        rows.append((name, name == "ffmpeg", bool(p), p or INSTALL_HINT[name]))
     fw = find_spec("faster_whisper") is not None
     rows.append(("faster-whisper", False, fw, "untuk subtitle otomatis" if fw else INSTALL_HINT["faster-whisper"]))
     yt = find_ytdlp()
     yt_info = ("bawaan paket .exe" if yt and yt[0] == sys.executable else "untuk link YouTube") if yt else INSTALL_HINT["yt-dlp"]
     rows.append(("yt-dlp", False, bool(yt), yt_info))
-    js = shutil.which("deno") or shutil.which("node")
+    js = which_safe("deno") or which_safe("node")
     rows.append(("deno / node", False, bool(js), "dipakai yt-dlp untuk YouTube" if js else INSTALL_HINT["deno"]))
     rows.append(("rich", False, _out is not None, "tampilan terminal" if _out else INSTALL_HINT["rich"]))
     return rows
@@ -277,7 +306,7 @@ def transcribe(media, lang, model):
         die("faster-whisper belum terpasang. Jalankan: pip install faster-whisper (atau pakai --no-subs / --srt file.srt)")
     import numpy as np
     # baca audio lewat ffmpeg (16 kHz mono) supaya tidak bergantung pada versi PyAV
-    pcm = subprocess.run(["ffmpeg", "-v", "error", "-i", media, "-f", "f32le", "-ac", "1", "-ar", "16000", "-"],
+    pcm = subprocess.run([tool("ffmpeg"), "-v", "error", "-i", media, "-f", "f32le", "-ac", "1", "-ar", "16000", "-"],
                          capture_output=True)
     if pcm.returncode or not pcm.stdout:
         die("Gagal membaca audio:\n" + pcm.stderr.decode(errors="ignore")[-800:])
@@ -437,7 +466,7 @@ def _np():
 def loudness_curve(path, start=None, dur=None, rate=8000):
     """Kerasnya suara (dB) per detik. Audio dibaca bertahap, jadi video berjam-jam pun tidak memenuhi RAM."""
     np = _np()
-    cmd = ["ffmpeg", "-v", "error"]
+    cmd = [tool("ffmpeg"), "-v", "error"]
     if start is not None:
         cmd += ["-ss", f"{start:.3f}"]
     if dur is not None:
@@ -608,7 +637,7 @@ def find_moments(a, url_mode, ytdlp, tmp):
             else:
                 f, rs_in_file, base = source, r["start"] - offset, r["start"]
             clip = os.path.join(tmp, f"cand{i}.wav")
-            run(["ffmpeg", "-y", "-v", "error", "-ss", f"{max(0, rs_in_file):.3f}", "-t", f"{r['end'] - r['start']:.3f}",
+            run([tool("ffmpeg"), "-y", "-v", "error", "-ss", f"{max(0, rs_in_file):.3f}", "-t", f"{r['end'] - r['start']:.3f}",
                  "-i", f, "-vn", "-ac", "1", "-ar", "16000", clip])
             with busy("mentranskripsi singkat"):
                 words, _ = transcribe(clip, a.lang, a.auto_model)
@@ -802,7 +831,7 @@ def render_clip(a, cfg, url_mode, ytdlp, cuts, labels, out):
         fc += "".join(f"[v{i}][a{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=1[v][a]"
         step(1, f"memotong {n} bagian ...")
         with busy("memotong"):
-            run(["ffmpeg", "-y", "-v", "error"] + inputs + ["-filter_complex", fc, "-map", "[v]", "-map", "[a]",
+            run([tool("ffmpeg"), "-y", "-v", "error"] + inputs + ["-filter_complex", fc, "-map", "[v]", "-map", "[a]",
                  "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "aac", "-b:a", "192k", raw])
 
         # 2) subtitle: ditranskripsi dari potongan itu sendiri -> waktu selalu pas
@@ -837,7 +866,7 @@ def render_clip(a, cfg, url_mode, ytdlp, cuts, labels, out):
         if lines:
             open(os.path.join(tmp, "subs.ass"), "w", encoding="utf-8").write(build_ass(lines, cfg))
             chain += f";[{last}]subtitles=subs.ass[s]"; last = "s"  # ffmpeg dijalankan dari folder tmp
-        cmd = ["ffmpeg", "-y", "-v", "error", "-i", os.path.abspath(raw)]
+        cmd = [tool("ffmpeg"), "-y", "-v", "error", "-i", os.path.abspath(raw)]
         if a.logo:
             cmd += ["-i", os.path.abspath(a.logo)]
             chain += f";[1:v]format=rgba,scale=iw*{cfg['logo_scale']}:-1[w];[{last}][w]overlay=40:118[o]"; last = "o"
@@ -869,8 +898,7 @@ def main(argv=None):
         ap.error("--pick hanya dipakai bersama --auto")
     cfg = resolve(a)
 
-    if not shutil.which("ffmpeg"):
-        die("ffmpeg tidak ditemukan di PATH. Jalankan `clipgaskeun --cek` untuk cara memasangnya.")
+    ffmpeg_path = tool("ffmpeg")
     url_mode = is_url(a.input)
     if not url_mode and not os.path.isfile(a.input):
         die(f"File tidak ada: {a.input}")
@@ -879,6 +907,7 @@ def main(argv=None):
         ytdlp = find_ytdlp()
         if not ytdlp:
             die("yt-dlp belum terpasang (dibutuhkan untuk link). Pasang: winget install yt-dlp  atau  pip install yt-dlp")
+        ytdlp += ["--ffmpeg-location", ffmpeg_path]  # yt-dlp memakai ffmpeg yang sama, tidak mencari sendiri
     if a.logo and not os.path.isfile(a.logo):
         die(f"File logo tidak ada: {a.logo}")
     if a.srt and not os.path.isfile(a.srt):

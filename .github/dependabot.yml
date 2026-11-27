@@ -1,0 +1,8 @@
+# Memberi tahu (lewat pull request) kalau ada versi baru dari action yang dipakai workflow,
+# supaya pin SHA-nya bisa diperbarui dengan sadar, bukan dibiarkan usang.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

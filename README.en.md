@@ -19,6 +19,7 @@ Cut long videos (streams, podcasts, etc.) into 9:16 Shorts with a blurred backgr
 ## Easiest (Windows): the .exe, no Python needed
 1. Install ffmpeg: open PowerShell and run `winget install ffmpeg` (for YouTube links also `winget install DenoLand.Deno`). Close and reopen the terminal.
 2. Download **`clipgaskeun-windows.zip`** from [Releases](https://github.com/ululbiasaajaa/clipgaskeun/releases/latest) and extract it.
+   (Want to be sure the file is genuine? The release notes list its **SHA256**. Compare it with `Get-FileHash clipgaskeun-windows.zip -Algorithm SHA256` in PowerShell. With the GitHub CLI: `gh attestation verify clipgaskeun-windows.zip --repo ululbiasaajaa/clipgaskeun`.)
 3. Open the extracted `clipgaskeun` folder. Click File Explorer's **address bar** (the one showing the folder path, not the Search box), press **Ctrl + A** to select the whole path, type `cmd`, press Enter. A terminal opens in that folder.
    Alternatively open Command Prompt from the Start menu and run `cd /d C:\path\to\clipgaskeun`.
 4. Use the examples below with `clipgaskeun.exe` in front:
@@ -183,7 +184,7 @@ Quick tests (no ffmpeg or Whisper model needed):
 pip install pytest
 python -m pytest
 ```
-GitHub Actions runs the same tests on every push. The Windows `.exe` is built by GitHub Actions (`.github/workflows/release.yml`) whenever a version tag is pushed (e.g. `git tag v0.4.0`, `git push --tags`) and appears on the Releases page.
+GitHub Actions runs the same tests on every push. The Windows `.exe` is built by GitHub Actions (`.github/workflows/release.yml`) whenever a version tag is pushed (e.g. `git tag v0.4.1`, `git push origin v0.4.1`) and appears on the Releases page with its SHA256 and a build attestation. Every action is pinned to a commit SHA and build libraries are installed from `requirements-build.txt` (exact versions + hashes), so a hijacked third-party release can't slip into the `.exe`. Update that list deliberately before a release.
 
 ## Important
 Downloading and reusing other people's content may violate YouTube's Terms of Service and the creator's copyright. Only use it on content you own or have clear permission to use. You are responsible for how you use it.

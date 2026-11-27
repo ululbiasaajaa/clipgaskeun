@@ -1,29 +1,37 @@
 name: rilis-windows
 # Membuat clipgaskeun-windows.zip (clipgaskeun.exe + semua yang dibutuhkan kecuali ffmpeg)
-# setiap kali tag versi (mis. v0.4.0) di-push, lalu memasangnya di halaman Releases.
+# setiap kali tag versi (mis. v0.4.1) di-push, lalu memasangnya di halaman Releases
+# bersama SHA256 dan bukti asal-usul (attestation) supaya pengunduh bisa memeriksa keasliannya.
 # Bisa juga dijalankan manual dari tab Actions (hasilnya diunduh sebagai artifact) untuk uji coba.
+#
+# Keamanan: setiap action dikunci ke commit-nya (SHA, versi di komentar), dan semua pustaka build
+# dipasang dari requirements-build.txt (versi persis + hash). Pembaruan action dibantu dependabot.yml.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   windows:
     runs-on: windows-latest
+    permissions:
+      contents: write        # memasang file di halaman Releases
+      id-token: write        # bukti asal-usul (attestation)
+      attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
-      - name: Pasang dependensi
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller faster-whisper "yt-dlp[default]" rich pytest
+      - name: Pasang dependensi (versi persis + hash)
+        run: pip install --require-hashes -r requirements-build.txt
 
       - name: Tes
         run: python -m pytest -q
@@ -60,16 +68,49 @@ jobs:
           Compress-Archive -Path dist\clipgaskeun -DestinationPath clipgaskeun-windows.zip
           "{0:N0} MB" -f ((Get-Item clipgaskeun-windows.zip).Length / 1MB)
 
+      - name: Hitung SHA256 dan siapkan catatan rilis
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash clipgaskeun-windows.zip -Algorithm SHA256).Hash.ToLower()
+          [IO.File]::WriteAllText("$PWD\clipgaskeun-windows.zip.sha256", "$hash  clipgaskeun-windows.zip`n")
+          "SHA256 clipgaskeun-windows.zip: $hash" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          $bt = [char]96
+          $notes = @(
+            "## Cek keaslian unduhan / Verify your download",
+            "",
+            "SHA256 clipgaskeun-windows.zip:",
+            "",
+            "$bt$bt$bt",
+            "$hash",
+            "$bt$bt$bt",
+            "",
+            "- PowerShell: ${bt}Get-FileHash clipgaskeun-windows.zip -Algorithm SHA256${bt} (hasilnya harus sama / must match)",
+            "- GitHub CLI: ${bt}gh attestation verify clipgaskeun-windows.zip --repo ululbiasaajaa/clipgaskeun${bt} (membuktikan file ini dibangun otomatis dari repo ini / proves this file was built from this repo)",
+            ""
+          )
+          Set-Content -Path release-notes.md -Value $notes -Encoding utf8
+
+      - name: Bukti asal-usul (attestation)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-path: clipgaskeun-windows.zip
+
       - name: Simpan sebagai artifact (uji coba manual)
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: clipgaskeun-windows
-          path: clipgaskeun-windows.zip
+          path: |
+            clipgaskeun-windows.zip
+            clipgaskeun-windows.zip.sha256
 
       - name: Pasang di halaman Releases
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          files: clipgaskeun-windows.zip
+          files: |
+            clipgaskeun-windows.zip
+            clipgaskeun-windows.zip.sha256
+          body_path: release-notes.md
           generate_release_notes: true

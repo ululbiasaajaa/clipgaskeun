@@ -137,3 +137,38 @@ def test_loud_windows_are_spread_out():
     picks = cg.loud_windows(db, 45, 2)
     starts = sorted(s for s, _, _ in picks)
     assert starts[1] - starts[0] >= 135      # kandidat kedua tidak boleh tetangga kandidat pertama
+
+
+def _fake_tool(folder, name):
+    """Buat file 'program' palsu yang bisa dijalankan (di Windows perlu akhiran .exe)."""
+    p = folder / (name + (".exe" if os.name == "nt" else ""))
+    p.write_text("x")
+    p.chmod(0o755)
+    return p
+
+
+def test_which_safe_returns_full_path_and_skips_cwd(tmp_path, monkeypatch):
+    bin_dir, work = tmp_path / "bin", tmp_path / "work"
+    bin_dir.mkdir(); work.mkdir()
+    real = _fake_tool(bin_dir, "faketool")
+    _fake_tool(work, "decoytool")                      # 'program palsu' di folder tempat terminal dibuka
+    monkeypatch.chdir(work)
+    monkeypatch.setenv("PATHEXT", ".EXE")
+    monkeypatch.setenv("PATH", os.pathsep.join([".", "relbin", str(bin_dir)]))
+    assert cg.which_safe("faketool") == str(real)      # path lengkap, bukan sekadar nama
+    assert os.path.isabs(cg.which_safe("faketool"))
+    assert cg.which_safe("decoytool") is None          # folder kerja / PATH relatif tidak dipercaya
+
+
+def test_tool_dies_when_missing(tmp_path, monkeypatch):
+    import pytest
+    monkeypatch.setenv("PATH", str(tmp_path))
+    with pytest.raises(SystemExit):
+        cg.tool("tidak-ada-program-ini")
+
+
+def test_no_bare_tool_names_in_commands():
+    """Penjaga: ffmpeg/ffprobe tidak boleh dipanggil hanya dengan namanya (lihat which_safe)."""
+    src = open(cg.__file__, encoding="utf-8").read()
+    assert '["ffmpeg"' not in src and '["ffprobe"' not in src
+    assert '"ffmpeg", "-' not in src
