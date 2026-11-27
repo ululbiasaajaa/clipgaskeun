@@ -47,7 +47,18 @@ jobs:
           clipgaskeun.py
 
       - name: Pasang ffmpeg (hanya untuk menguji .exe)
-        run: choco install ffmpeg -y --no-progress
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress
+          # Jangan mengandalkan shim choco (bisa tidak terbentuk): cari ffmpeg.exe asli yang punya ffprobe di sebelahnya
+          $hit = Get-ChildItem -Path C:\ProgramData\chocolatey -Recurse -Filter ffmpeg.exe -ErrorAction SilentlyContinue |
+            Where-Object { Test-Path (Join-Path $_.DirectoryName "ffprobe.exe") } | Select-Object -First 1
+          if (-not $hit) {
+            choco list --local-only
+            throw "ffmpeg.exe + ffprobe.exe tidak ditemukan setelah choco install"
+          }
+          "ffmpeg ada di: $($hit.DirectoryName)"
+          Add-Content -Path $env:GITHUB_PATH -Value $hit.DirectoryName
 
       - name: Uji clipgaskeun.exe
         shell: pwsh
