@@ -49,14 +49,21 @@ jobs:
       - name: Pasang ffmpeg (hanya untuk menguji .exe)
         shell: pwsh
         run: |
-          choco install ffmpeg -y --no-progress
-          # Jangan mengandalkan shim choco (bisa tidak terbentuk): cari ffmpeg.exe asli yang punya ffprobe di sebelahnya
-          $hit = Get-ChildItem -Path C:\ProgramData\chocolatey -Recurse -Filter ffmpeg.exe -ErrorAction SilentlyContinue |
-            Where-Object { Test-Path (Join-Path $_.DirectoryName "ffprobe.exe") } | Select-Object -First 1
-          if (-not $hit) {
-            choco list --local-only
-            throw "ffmpeg.exe + ffprobe.exe tidak ditemukan setelah choco install"
+          # Server paket Chocolatey kadang gangguan sesaat (mis. 504) dan choco tidak menyetop proses saat itu.
+          # Jadi: coba sampai 4 kali, dan setiap kali periksa apakah ffmpeg.exe + ffprobe.exe benar-benar ada.
+          function Find-Ffmpeg {
+            Get-ChildItem -Path C:\ProgramData\chocolatey -Recurse -Filter ffmpeg.exe -ErrorAction SilentlyContinue |
+              Where-Object { Test-Path (Join-Path $_.DirectoryName "ffprobe.exe") } | Select-Object -First 1
           }
+          $hit = $null
+          foreach ($i in 1..4) {
+            choco install ffmpeg -y --no-progress
+            $hit = Find-Ffmpeg
+            if ($hit) { break }
+            "Percobaan $i belum berhasil, menunggu 30 detik ..."
+            Start-Sleep -Seconds 30
+          }
+          if (-not $hit) { throw "ffmpeg.exe + ffprobe.exe tidak ditemukan setelah 4 kali choco install" }
           "ffmpeg ada di: $($hit.DirectoryName)"
           Add-Content -Path $env:GITHUB_PATH -Value $hit.DirectoryName
 
